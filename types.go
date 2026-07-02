@@ -84,6 +84,8 @@ type Validation interface {
 	// ClearRules/ClearFilters drop a field's whole expression/chain.
 	ClearRules(field string) error
 	ClearFilters(field string) error
+	// AddMessages overrides message templates for this run only, outranking WithMessages.
+	AddMessages(messages map[string]string) error
 	Rules() map[string]string
 	Filters() map[string]string
 	// Bind writes the ORIGINAL data to ptr without requiring Validate.

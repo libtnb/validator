@@ -97,7 +97,10 @@ metacharacters like `\d` are preserved.
 ## Semantics
 
 **Empty values (omitempty).** Non-presence rules pass on empty/zero values, so an
-optional field is only checked when present.
+optional field is only checked when present. This is why `!` differs from `not_*`:
+`in:a,b` passes on `""` (omitempty), so `!in:a,b` *rejects* `""` while `not_in:a,b`
+passes it. Negate a non-presence rule with its `not_*`/`ne` form, not `!` (which is
+for presence rules like `!required`).
 
 **`required`.** By default `required` asserts **present and non-nil**: a Go zero
 value (`""`, `0`, `false`) counts as provided and **passes**, while a `nil`
@@ -243,8 +246,16 @@ Locale packs (`ZhHans`, `ZhHant`, `Ja`, `Ko`, `Es`) live in the
 `github.com/libtnb/validator/translations` subpackage.
 
 Templates use `{field}` (replaced by the attribute alias or field name) and
-`{0}`, `{1}`, ... (the rule arguments). Priority:
-`field.rule override > rule override > i18n > built-in English`.
+`{0}`, `{1}`, ... (the rule arguments). `Validation.AddMessages` overrides
+templates for a single run:
+
+```go
+vd := v.Struct(req)
+vd.AddMessages(map[string]string{"email.required": "We need your email."})
+```
+
+Priority: `AddMessages > WithMessages > i18n > built-in English`; within a map,
+`field.rule` beats `rule`.
 
 ## License
 

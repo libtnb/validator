@@ -227,3 +227,78 @@ func TestErrorRuleOverridesRule(t *testing.T) {
 		t.Error("a RegisterErrorRule should override a same-signature built-in Rule")
 	}
 }
+
+// TestAddMessagesPerValidation: AddMessages overrides for one run only, beats the
+// Validator's WithMessages, and does not leak to a sibling validation.
+func TestAddMessagesPerValidation(t *testing.T) {
+	v := NewValidator(WithMessages(map[string]string{"required": "global"}))
+
+	vd := v.Map(map[string]any{}, map[string]string{"name": "required"})
+	if err := vd.AddMessages(map[string]string{"required": "per-run"}); err != nil {
+		t.Fatal(err)
+	}
+	vd.Validate(context.Background())
+	if got := vd.Errors().OneFor("name"); got != "per-run" {
+		t.Errorf("per-validation override should beat WithMessages: %q", got)
+	}
+
+	// a sibling validation from the same Validator keeps the global message
+	sib := v.Map(map[string]any{}, map[string]string{"name": "required"})
+	sib.Validate(context.Background())
+	if got := sib.Errors().OneFor("name"); got != "global" {
+		t.Errorf("AddMessages must not leak to a sibling validation: %q", got)
+	}
+}
+
+// TestAddMessagesFieldRulePriority: within the override, "field.rule" beats "rule".
+func TestAddMessagesFieldRulePriority(t *testing.T) {
+	v := NewValidator()
+	vd := v.Map(map[string]any{}, map[string]string{"email": "required", "name": "required"})
+	_ = vd.AddMessages(map[string]string{
+		"email.required": "email specific",
+		"required":       "generic",
+	})
+	vd.Validate(context.Background())
+	if got := vd.Errors().OneFor("email"); got != "email specific" {
+		t.Errorf("field.rule override should win: %q", got)
+	}
+	if got := vd.Errors().OneFor("name"); got != "generic" {
+		t.Errorf("rule override should apply to other fields: %q", got)
+	}
+}
+
+// TestAddMessagesMergeAndCopy: repeat calls merge; the caller's map is copied.
+func TestAddMessagesMergeAndCopy(t *testing.T) {
+	v := NewValidator()
+	vd := v.Map(map[string]any{}, map[string]string{"a": "required", "b": "required"})
+	src := map[string]string{"a.required": "A"}
+	_ = vd.AddMessages(src)
+	_ = vd.AddMessages(map[string]string{"b.required": "B"})
+	src["a.required"] = "MUTATED" // mutating the input after the call must not matter
+	vd.Validate(context.Background())
+	if got := vd.Errors().OneFor("a"); got != "A" {
+		t.Errorf("input map should be copied, got %q", got)
+	}
+	if got := vd.Errors().OneFor("b"); got != "B" {
+		t.Errorf("repeat AddMessages should merge, got %q", got)
+	}
+}
+
+// TestAddMessagesBeatsTranslation: AddMessages outranks WithTranslation; empty input is a no-op.
+func TestAddMessagesBeatsTranslation(t *testing.T) {
+	v := NewValidator(WithTranslation(translations.ZhHans()))
+	vd := v.Map(map[string]any{}, map[string]string{"x": "required"})
+	_ = vd.AddMessages(map[string]string{"required": "override wins"})
+	vd.Validate(context.Background())
+	if got := vd.Errors().OneFor("x"); got != "override wins" {
+		t.Errorf("AddMessages should beat WithTranslation: %q", got)
+	}
+
+	nop := v.Map(map[string]any{}, map[string]string{"x": "required"})
+	_ = nop.AddMessages(nil)
+	_ = nop.AddMessages(map[string]string{})
+	nop.Validate(context.Background())
+	if got := nop.Errors().OneFor("x"); !strings.Contains(got, "必填") {
+		t.Errorf("empty AddMessages should be a no-op (translation kept): %q", got)
+	}
+}

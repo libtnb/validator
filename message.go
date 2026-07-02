@@ -4,13 +4,22 @@ import (
 	"strings"
 )
 
+// AddMessages implements Validation; copies and merges the input.
+func (vd *validation) AddMessages(messages map[string]string) error {
+	if len(messages) == 0 {
+		return nil
+	}
+	vd.errors.override = mergeStrMap(vd.errors.override, messages)
+	return nil
+}
+
 // resolveMessage resolves fresh per read from immutable state (race-free).
-func (v *Validator) resolveMessage(e FieldError, base string) string {
+func (v *Validator) resolveMessage(e FieldError, base string, override map[string]string) string {
 	// suffix from explicit base, not bracket parsing: a literal name with brackets is not a dive element.
 	suffix := strings.TrimPrefix(e.Field, base)
 	tmpl := e.Message
 	if e.Rule != "" {
-		if t, ok := v.lookupTemplate(e.Field, base, e.Rule); ok {
+		if t, ok := v.lookupTemplate(override, e.Field, base, e.Rule); ok {
 			tmpl = t
 		}
 	}
@@ -40,8 +49,10 @@ func (v *Validator) applyTransformFunc(msg string) (out string) {
 	return v.transformFunc(msg)
 }
 
-func (v *Validator) lookupTemplate(field, base, rule string) (string, bool) {
-	for _, m := range []map[string]string{v.messages, v.translation} {
+// lookupTemplate resolves a template: override > messages > translation; within
+// each, "field.rule" > "base.rule" > "rule".
+func (v *Validator) lookupTemplate(override map[string]string, field, base, rule string) (string, bool) {
+	for _, m := range []map[string]string{override, v.messages, v.translation} {
 		if m == nil {
 			continue
 		}

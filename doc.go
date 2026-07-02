@@ -7,4 +7,8 @@
 // required means present-and-non-nil: a zero value ("", 0, false) passes, a nil
 // pointer or absent key fails. Use notblank/filled to reject empty strings, or
 // WithStrictRequired to demand a non-zero value.
+//
+// To negate a non-presence rule use its not_*/ne form, not !: omitempty makes
+// in:a,b pass on "", so !in:a,b rejects "" while not_in:a,b passes it. ! is for
+// presence rules like !required.
 package validator

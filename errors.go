@@ -14,7 +14,9 @@ var (
 type validationErrors struct {
 	items []FieldError
 	bases []string
-	v     *Validator
+	// override holds per-validation message templates
+	override map[string]string
+	v        *Validator
 }
 
 func (e *validationErrors) add(fe FieldError, base string) {
@@ -26,7 +28,7 @@ func (e *validationErrors) message(i int) string {
 	if e.v == nil {
 		return e.items[i].Message
 	}
-	return e.v.resolveMessage(e.items[i], e.bases[i])
+	return e.v.resolveMessage(e.items[i], e.bases[i], e.override)
 }
 
 func (e *validationErrors) build() map[string]map[string]string {
