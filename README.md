@@ -8,7 +8,7 @@
 [![Stars](https://img.shields.io/github/stars/libtnb/validator?style=flat)](https://github.com/libtnb/validator)
 [![License](https://img.shields.io/github/license/libtnb/validator)](https://opensource.org/license/MIT)
 
-A modern, zero-dependency, high-performance Go validator with a **boolean rule DSL**.
+A modern, zero-dependency, high-performance Go Struct and Field validator with a **boolean rule DSL**.
 
 ## Features
 
