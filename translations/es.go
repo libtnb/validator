@@ -1,0 +1,73 @@
+package translations
+
+// Es returns Spanish templates keyed by rule signature.
+func Es() map[string]string {
+	return map[string]string{
+		"required":         "{field} es obligatorio",
+		"filled":           "{field} no puede estar vacío",
+		"notblank":         "{field} no puede estar en blanco",
+		"required_if":      "{field} es obligatorio cuando {0} es {1+}",
+		"required_unless":  "{field} es obligatorio a menos que {0} sea {1+}",
+		"required_with":    "{field} es obligatorio cuando {0} está presente",
+		"required_without": "{field} es obligatorio cuando {0} no está presente",
+
+		"alpha":      "{field} solo puede contener letras",
+		"alphanum":   "{field} solo puede contener letras y números",
+		"ascii":      "{field} solo puede contener caracteres ASCII",
+		"lowercase":  "{field} debe estar en minúsculas",
+		"uppercase":  "{field} debe estar en mayúsculas",
+		"contains":   "{field} debe contener {0}",
+		"excludes":   "{field} no puede contener {0}",
+		"startswith": "{field} debe comenzar con {0}",
+		"endswith":   "{field} debe terminar con {0}",
+
+		"email":     "{field} debe ser una dirección de correo electrónico válida",
+		"url":       "{field} debe ser una URL válida",
+		"uri":       "{field} debe ser una URI válida",
+		"uuid":      "{field} debe ser un UUID válido",
+		"ip":        "{field} debe ser una dirección IP válida",
+		"ipv4":      "{field} debe ser una dirección IPv4 válida",
+		"ipv6":      "{field} debe ser una dirección IPv6 válida",
+		"json":      "{field} debe ser un JSON válido",
+		"datetime":  "{field} debe ser una fecha y hora válidas",
+		"date":      "{field} debe ser una fecha válida",
+		"regex":     "{field} tiene un formato no válido",
+		"not_regex": "{field} tiene un formato no válido",
+		"base64":    "{field} debe ser una cadena base64 válida",
+		"mac":       "{field} debe ser una dirección MAC válida",
+		"hostname":  "{field} debe ser un nombre de host válido",
+
+		"min":     "{field} no puede ser menor que {0}",
+		"max":     "{field} no puede ser mayor que {0}",
+		"between": "{field} debe estar entre {0} y {1}",
+		"gt":      "{field} debe ser mayor que {0}",
+		"gte":     "{field} debe ser mayor o igual que {0}",
+		"lt":      "{field} debe ser menor que {0}",
+		"lte":     "{field} debe ser menor o igual que {0}",
+		"len":     "{field} debe tener una longitud de {0}",
+		"size":    "{field} debe tener una longitud de {0}",
+		"digits":  "{field} debe tener {0} dígitos",
+		"numeric": "{field} debe ser numérico",
+		"number":  "{field} debe ser un número entero",
+		"boolean": "{field} debe ser un valor booleano",
+
+		"in":        "{field} tiene un valor no válido",
+		"not_in":    "{field} tiene un valor no válido",
+		"eq":        "{field} debe ser igual a {0}",
+		"ne":        "{field} no debe ser igual a {0}",
+		"same":      "{field} debe coincidir con {0}",
+		"different": "{field} debe ser diferente de {0}",
+		"eqfield":   "{field} debe coincidir con {0}",
+		"nefield":   "{field} debe ser diferente de {0}",
+		"gtfield":   "{field} debe ser mayor que {0}",
+		"gtefield":  "{field} debe ser mayor o igual que {0}",
+		"ltfield":   "{field} debe ser menor que {0}",
+		"ltefield":  "{field} debe ser menor o igual que {0}",
+		"confirmed": "{field} no coincide",
+
+		// synthetic composite messages: "||" is the all-branches-failed parent,
+		// "!" is a failed negation
+		"||": "{field} no cumple ninguna de las condiciones",
+		"!":  "{field} no es válido",
+	}
+}

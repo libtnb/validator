@@ -1,0 +1,73 @@
+package translations
+
+// Ja returns Japanese templates keyed by rule signature.
+func Ja() map[string]string {
+	return map[string]string{
+		"required":         "{field}は必須です",
+		"filled":           "{field}は空にできません",
+		"notblank":         "{field}は空白にできません",
+		"required_if":      "{0}が{1+}の場合、{field}は必須です",
+		"required_unless":  "{0}が{1+}でない限り、{field}は必須です",
+		"required_with":    "{0}が存在する場合、{field}は必須です",
+		"required_without": "{0}が存在しない場合、{field}は必須です",
+
+		"alpha":      "{field}は英字のみ使用できます",
+		"alphanum":   "{field}は英字と数字のみ使用できます",
+		"ascii":      "{field}はASCII文字のみ使用できます",
+		"lowercase":  "{field}は小文字でなければなりません",
+		"uppercase":  "{field}は大文字でなければなりません",
+		"contains":   "{field}は{0}を含む必要があります",
+		"excludes":   "{field}は{0}を含むことはできません",
+		"startswith": "{field}は{0}で始まる必要があります",
+		"endswith":   "{field}は{0}で終わる必要があります",
+
+		"email":     "{field}は有効なメールアドレスである必要があります",
+		"url":       "{field}は有効なURLである必要があります",
+		"uri":       "{field}は有効なURIである必要があります",
+		"uuid":      "{field}は有効なUUIDである必要があります",
+		"ip":        "{field}は有効なIPアドレスである必要があります",
+		"ipv4":      "{field}は有効なIPv4アドレスである必要があります",
+		"ipv6":      "{field}は有効なIPv6アドレスである必要があります",
+		"json":      "{field}は有効なJSONである必要があります",
+		"datetime":  "{field}は有効な日時である必要があります",
+		"date":      "{field}は有効な日付である必要があります",
+		"regex":     "{field}の形式が正しくありません",
+		"not_regex": "{field}の形式が正しくありません",
+		"base64":    "{field}は有効なbase64文字列である必要があります",
+		"mac":       "{field}は有効なMACアドレスである必要があります",
+		"hostname":  "{field}は有効なホスト名である必要があります",
+
+		"min":     "{field}は{0}以上である必要があります",
+		"max":     "{field}は{0}以下である必要があります",
+		"between": "{field}は{0}から{1}の間である必要があります",
+		"gt":      "{field}は{0}より大きい必要があります",
+		"gte":     "{field}は{0}以上である必要があります",
+		"lt":      "{field}は{0}より小さい必要があります",
+		"lte":     "{field}は{0}以下である必要があります",
+		"len":     "{field}の長さは{0}でなければなりません",
+		"size":    "{field}の長さは{0}でなければなりません",
+		"digits":  "{field}は{0}桁の数字である必要があります",
+		"numeric": "{field}は数値である必要があります",
+		"number":  "{field}は整数である必要があります",
+		"boolean": "{field}は真偽値である必要があります",
+
+		"in":        "{field}の値が無効です",
+		"not_in":    "{field}の値が無効です",
+		"eq":        "{field}は{0}と等しい必要があります",
+		"ne":        "{field}は{0}と異なる必要があります",
+		"same":      "{field}は{0}と一致する必要があります",
+		"different": "{field}は{0}と異なる必要があります",
+		"eqfield":   "{field}は{0}と一致する必要があります",
+		"nefield":   "{field}は{0}と異なる必要があります",
+		"gtfield":   "{field}は{0}より大きい必要があります",
+		"gtefield":  "{field}は{0}以上である必要があります",
+		"ltfield":   "{field}は{0}より小さい必要があります",
+		"ltefield":  "{field}は{0}以下である必要があります",
+		"confirmed": "{field}が一致しません",
+
+		// synthetic composite messages: "||" is the all-branches-failed parent,
+		// "!" is a failed negation
+		"||": "{field}はいずれの条件も満たしていません",
+		"!":  "{field}は無効です",
+	}
+}

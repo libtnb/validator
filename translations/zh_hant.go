@@ -1,0 +1,73 @@
+package translations
+
+// ZhHant returns Traditional Chinese (zh-Hant) templates keyed by rule signature.
+func ZhHant() map[string]string {
+	return map[string]string{
+		"required":         "{field} 為必填欄位",
+		"filled":           "{field} 不能為空",
+		"notblank":         "{field} 不能為空白",
+		"required_if":      "當 {0} 為 {1+} 時 {field} 為必填欄位",
+		"required_unless":  "除非 {0} 為 {1+}，否則 {field} 為必填欄位",
+		"required_with":    "當 {0} 存在時 {field} 為必填欄位",
+		"required_without": "當 {0} 不存在時 {field} 為必填欄位",
+
+		"alpha":      "{field} 只能包含字母",
+		"alphanum":   "{field} 只能包含字母和數字",
+		"ascii":      "{field} 只能包含 ASCII 字元",
+		"lowercase":  "{field} 必須為小寫",
+		"uppercase":  "{field} 必須為大寫",
+		"contains":   "{field} 必須包含 {0}",
+		"excludes":   "{field} 不能包含 {0}",
+		"startswith": "{field} 必須以 {0} 開頭",
+		"endswith":   "{field} 必須以 {0} 結尾",
+
+		"email":     "{field} 必須是有效的電子郵件地址",
+		"url":       "{field} 必須是有效的 URL",
+		"uri":       "{field} 必須是有效的 URI",
+		"uuid":      "{field} 必須是有效的 UUID",
+		"ip":        "{field} 必須是有效的 IP 位址",
+		"ipv4":      "{field} 必須是有效的 IPv4 位址",
+		"ipv6":      "{field} 必須是有效的 IPv6 位址",
+		"json":      "{field} 必須是有效的 JSON",
+		"datetime":  "{field} 必須是有效的日期時間",
+		"date":      "{field} 必須是有效的日期",
+		"regex":     "{field} 格式不正確",
+		"not_regex": "{field} 格式不正確",
+		"base64":    "{field} 必須是有效的 base64 字串",
+		"mac":       "{field} 必須是有效的 MAC 位址",
+		"hostname":  "{field} 必須是有效的主機名稱",
+
+		"min":     "{field} 不能小於 {0}",
+		"max":     "{field} 不能大於 {0}",
+		"between": "{field} 必須介於 {0} 和 {1} 之間",
+		"gt":      "{field} 必須大於 {0}",
+		"gte":     "{field} 必須大於或等於 {0}",
+		"lt":      "{field} 必須小於 {0}",
+		"lte":     "{field} 必須小於或等於 {0}",
+		"len":     "{field} 長度必須為 {0}",
+		"size":    "{field} 長度必須為 {0}",
+		"digits":  "{field} 必須是 {0} 位數字",
+		"numeric": "{field} 必須是數字",
+		"number":  "{field} 必須是整數",
+		"boolean": "{field} 必須是布林值",
+
+		"in":        "{field} 取值無效",
+		"not_in":    "{field} 取值無效",
+		"eq":        "{field} 必須等於 {0}",
+		"ne":        "{field} 不能等於 {0}",
+		"same":      "{field} 與 {0} 必須一致",
+		"different": "{field} 與 {0} 必須不同",
+		"eqfield":   "{field} 與 {0} 必須一致",
+		"nefield":   "{field} 與 {0} 必須不同",
+		"gtfield":   "{field} 必須大於 {0}",
+		"gtefield":  "{field} 必須大於或等於 {0}",
+		"ltfield":   "{field} 必須小於 {0}",
+		"ltefield":  "{field} 必須小於或等於 {0}",
+		"confirmed": "{field} 兩次輸入不一致",
+
+		// synthetic composite messages: "||" is the all-branches-failed parent,
+		// "!" is a failed negation
+		"||": "{field} 不滿足任一條件",
+		"!":  "{field} 無效",
+	}
+}

@@ -1,0 +1,73 @@
+package translations
+
+// Ko returns Korean templates keyed by rule signature.
+func Ko() map[string]string {
+	return map[string]string{
+		"required":         "{field}은(는) 필수 항목입니다",
+		"filled":           "{field}은(는) 비워둘 수 없습니다",
+		"notblank":         "{field}은(는) 공백일 수 없습니다",
+		"required_if":      "{0}이(가) {1+}일 때 {field}은(는) 필수입니다",
+		"required_unless":  "{0}이(가) {1+}이(가) 아니면 {field}은(는) 필수입니다",
+		"required_with":    "{0}이(가) 있을 때 {field}은(는) 필수입니다",
+		"required_without": "{0}이(가) 없을 때 {field}은(는) 필수입니다",
+
+		"alpha":      "{field}은(는) 영문자만 사용할 수 있습니다",
+		"alphanum":   "{field}은(는) 영문자와 숫자만 사용할 수 있습니다",
+		"ascii":      "{field}은(는) ASCII 문자만 사용할 수 있습니다",
+		"lowercase":  "{field}은(는) 소문자여야 합니다",
+		"uppercase":  "{field}은(는) 대문자여야 합니다",
+		"contains":   "{field}은(는) {0}을(를) 포함해야 합니다",
+		"excludes":   "{field}은(는) {0}을(를) 포함할 수 없습니다",
+		"startswith": "{field}은(는) {0}(으)로 시작해야 합니다",
+		"endswith":   "{field}은(는) {0}(으)로 끝나야 합니다",
+
+		"email":     "{field}은(는) 유효한 이메일 주소여야 합니다",
+		"url":       "{field}은(는) 유효한 URL이어야 합니다",
+		"uri":       "{field}은(는) 유효한 URI여야 합니다",
+		"uuid":      "{field}은(는) 유효한 UUID여야 합니다",
+		"ip":        "{field}은(는) 유효한 IP 주소여야 합니다",
+		"ipv4":      "{field}은(는) 유효한 IPv4 주소여야 합니다",
+		"ipv6":      "{field}은(는) 유효한 IPv6 주소여야 합니다",
+		"json":      "{field}은(는) 유효한 JSON이어야 합니다",
+		"datetime":  "{field}은(는) 유효한 날짜/시간이어야 합니다",
+		"date":      "{field}은(는) 유효한 날짜여야 합니다",
+		"regex":     "{field}의 형식이 올바르지 않습니다",
+		"not_regex": "{field}의 형식이 올바르지 않습니다",
+		"base64":    "{field}은(는) 유효한 base64 문자열이어야 합니다",
+		"mac":       "{field}은(는) 유효한 MAC 주소여야 합니다",
+		"hostname":  "{field}은(는) 유효한 호스트 이름이어야 합니다",
+
+		"min":     "{field}은(는) {0} 이상이어야 합니다",
+		"max":     "{field}은(는) {0} 이하여야 합니다",
+		"between": "{field}은(는) {0}에서 {1} 사이여야 합니다",
+		"gt":      "{field}은(는) {0}보다 커야 합니다",
+		"gte":     "{field}은(는) {0} 이상이어야 합니다",
+		"lt":      "{field}은(는) {0}보다 작아야 합니다",
+		"lte":     "{field}은(는) {0} 이하여야 합니다",
+		"len":     "{field}의 길이는 {0}이어야 합니다",
+		"size":    "{field}의 길이는 {0}이어야 합니다",
+		"digits":  "{field}은(는) {0}자리 숫자여야 합니다",
+		"numeric": "{field}은(는) 숫자여야 합니다",
+		"number":  "{field}은(는) 정수여야 합니다",
+		"boolean": "{field}은(는) 불리언 값이어야 합니다",
+
+		"in":        "{field}의 값이 유효하지 않습니다",
+		"not_in":    "{field}의 값이 유효하지 않습니다",
+		"eq":        "{field}은(는) {0}과(와) 같아야 합니다",
+		"ne":        "{field}은(는) {0}과(와) 달라야 합니다",
+		"same":      "{field}은(는) {0}과(와) 일치해야 합니다",
+		"different": "{field}은(는) {0}과(와) 달라야 합니다",
+		"eqfield":   "{field}은(는) {0}과(와) 일치해야 합니다",
+		"nefield":   "{field}은(는) {0}과(와) 달라야 합니다",
+		"gtfield":   "{field}은(는) {0}보다 커야 합니다",
+		"gtefield":  "{field}은(는) {0} 이상이어야 합니다",
+		"ltfield":   "{field}은(는) {0}보다 작아야 합니다",
+		"ltefield":  "{field}은(는) {0} 이하여야 합니다",
+		"confirmed": "{field}이(가) 일치하지 않습니다",
+
+		// synthetic composite messages: "||" is the all-branches-failed parent,
+		// "!" is a failed negation
+		"||": "{field}이(가) 어떤 조건도 만족하지 않습니다",
+		"!":  "{field}이(가) 유효하지 않습니다",
+	}
+}
