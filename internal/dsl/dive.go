@@ -25,7 +25,6 @@ func SplitDive(input string, isRawArg IsRawArgFunc) (container, element string, 
 			}
 
 			cEnd := tk.pos
-			eStart := tk.pos + len("dive")
 
 			if k > 0 {
 				if toks[k-1].typ != tAnd {
@@ -47,7 +46,7 @@ func SplitDive(input string, isRawArg IsRawArgFunc) (container, element string, 
 			if k+2 >= len(toks) || !startsValue(toks[k+2].typ) {
 				return "", "", false, &ParseError{Pos: toks[k+1].pos, Msg: "dangling operator after 'dive'"}
 			}
-			eStart = toks[k+1].pos + 2
+			eStart := toks[k+1].pos + 2
 
 			return strings.TrimSpace(input[:cEnd]), strings.TrimSpace(input[eStart:]), true, nil
 		}

@@ -37,7 +37,9 @@ func TestEmbeddedStructValidated(t *testing.T) {
 
 func TestAnyScalarValidatable(t *testing.T) {
 	vd := Any(42)
-	vd.AddRules("value", "min:100")
+	if err := vd.AddRules("value", "min:100"); err != nil {
+		t.Fatal(err)
+	}
 	vd.Validate(context.Background())
 	if !vd.Fails() {
 		t.Error("Any(42) with min:100 on 'value' should fail")
