@@ -189,7 +189,7 @@ func sniffFile(fh *multipart.FileHeader) (string, bool) {
 	if err != nil {
 		return "", false
 	}
-	defer fr.Close()
+	defer func() { _ = fr.Close() }()
 	var head [512]byte
 	n, err := io.ReadFull(fr, head[:])
 	if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
