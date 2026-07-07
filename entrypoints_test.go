@@ -456,3 +456,34 @@ func TestPackageHelpers(t *testing.T) {
 		t.Error("package URLValues should fail on a non-numeric value")
 	}
 }
+
+// TestSetDefault verifies SetDefault installs the validator behind Default
+// and the package-level helpers.
+func TestSetDefault(t *testing.T) {
+	old := Default()
+	t.Cleanup(func() { SetDefault(old) })
+
+	custom := NewValidator(WithMessages(map[string]string{"required": "custom-msg"}))
+	SetDefault(custom)
+
+	if Default() != custom {
+		t.Fatal("Default() should return the validator installed by SetDefault")
+	}
+
+	vd := Struct(struct {
+		Name *string `validate:"required"`
+	}{})
+	vd.Validate(context.Background())
+	if got := vd.Errors().One(); got != "custom-msg" {
+		t.Errorf("package helpers should route through the installed default, got message %q", got)
+	}
+}
+
+func TestSetDefaultNilPanics(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("SetDefault(nil) should panic")
+		}
+	}()
+	SetDefault(nil)
+}

@@ -320,6 +320,25 @@ vd.AddMessages(map[string]string{"email.required": "We need your email."})
 Priority: `AddMessages > WithMessages > i18n > built-in English`; within a map,
 `field.rule` beats `rule`.
 
+## The package-level default
+
+The top-level helpers (`validator.Struct`, `Map`, `JSON`, ...) run on a shared
+default instance. `SetDefault` replaces it process-wide — install a configured
+validator once at startup (like `slog.SetDefault`) and the rest of the program
+can validate through the package funcs without passing a `*Validator` around:
+
+```go
+v := validator.NewValidator(validator.WithTranslation(translations.ZhHans()))
+v.RegisterErrorRule(myDBRule)
+validator.SetDefault(v)
+
+// anywhere else
+vd := validator.Struct(req) // uses the installed default
+```
+
+`Default()` returns the current instance; before any `SetDefault` it is a
+lazily-created plain `NewValidator()`.
+
 ## License
 
 See [LICENSE](LICENSE).
