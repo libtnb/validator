@@ -339,6 +339,19 @@ vd := validator.Struct(req) // uses the installed default
 `Default()` returns the current instance; before any `SetDefault` it is a
 lazily-created plain `NewValidator()`.
 
+## Contrib modules
+
+Database-backed rules live in separate zero-impact modules so the core stays
+dependency-free:
+
+```bash
+go get github.com/libtnb/validator/contrib/gormrules
+```
+
+`gormrules.Register(v, db)` adds `exists:table,col[,col...]` and
+`not_exists:table,col[,col...]` backed by a `*gorm.DB`, with SQL-identifier
+validation on the rule arguments.
+
 ## License
 
 See [LICENSE](LICENSE).
