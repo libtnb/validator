@@ -294,3 +294,42 @@ func TestPackageLevelValid(t *testing.T) {
 		t.Error("data with no rules is vacuously valid")
 	}
 }
+
+// An absent value (nil pointer, missing key) has nothing to filter: running the
+// chain would materialize a zero value ("" from trim(nil)) that SafeBind then
+// writes over the target's existing data — a silent PATCH overwrite.
+func TestFilterSkipsAbsentValue(t *testing.T) {
+	type Patch struct {
+		Name *string `validate:"sometimes && required && min:3"`
+	}
+	v := NewValidator()
+	vd := v.Struct(&Patch{}) // Name absent
+	if err := vd.AddFilters("Name", "trim"); err != nil {
+		t.Fatal(err)
+	}
+	vd.Validate(context.Background())
+	if vd.Fails() {
+		t.Fatalf("absent field must skip: %v", vd.Errors().All())
+	}
+	prev := "keep-me"
+	dst := Patch{Name: &prev}
+	if err := vd.SafeBind(&dst); err != nil {
+		t.Fatal(err)
+	}
+	if dst.Name == nil || *dst.Name != "keep-me" {
+		t.Errorf("SafeBind must not materialize an absent filtered field, got %v", dst.Name)
+	}
+
+	// a present value still flows through the filter into SafeBind
+	val := "  padded  "
+	pv := v.Struct(&Patch{Name: &val})
+	_ = pv.AddFilters("Name", "trim")
+	pv.Validate(context.Background())
+	var pdst Patch
+	if err := pv.SafeBind(&pdst); err != nil {
+		t.Fatal(err)
+	}
+	if pdst.Name == nil || *pdst.Name != "padded" {
+		t.Errorf("present value must be filtered and bound, got %v", pdst.Name)
+	}
+}

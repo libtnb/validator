@@ -3,6 +3,7 @@ package validator
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"strings"
 	"testing"
@@ -769,5 +770,217 @@ func TestClearRulesAndFilters(t *testing.T) {
 	}
 	if _, ok := fv.Filters()["y"]; ok {
 		t.Error("ClearFilters must drop the field's chain")
+	}
+}
+
+// sometimes: PATCH semantics — an absent key skips every rule, a present key validates fully.
+func TestSometimes(t *testing.T) {
+	rules := map[string]string{"email": "sometimes && required && email"}
+	v := NewValidator()
+
+	absent := v.Map(map[string]any{}, rules)
+	absent.Validate(context.Background())
+	if absent.Fails() {
+		t.Errorf("absent key must skip sometimes-guarded rules: %v", absent.Errors().All())
+	}
+	bad := v.Map(map[string]any{"email": "nope"}, rules)
+	bad.Validate(context.Background())
+	if !bad.Fails() {
+		t.Error("present key must run the full chain")
+	}
+	good := v.Map(map[string]any{"email": "a@b.com"}, rules)
+	good.Validate(context.Background())
+	if good.Fails() {
+		t.Errorf("valid present value must pass: %v", good.Errors().All())
+	}
+
+	// struct: a nil pointer field counts as absent
+	type Patch struct {
+		Name *string `validate:"sometimes && required && min:3"`
+	}
+	np := v.Struct(&Patch{})
+	np.Validate(context.Background())
+	if np.Fails() {
+		t.Errorf("nil pointer + sometimes must skip: %v", np.Errors().All())
+	}
+	short := "ab"
+	sp := v.Struct(&Patch{Name: &short})
+	sp.Validate(context.Background())
+	if !sp.Fails() {
+		t.Error("present pointer must validate min:3")
+	}
+	// Valid() fast path agrees
+	if !v.Valid(&Patch{}) {
+		t.Error("Valid: nil pointer + sometimes must pass")
+	}
+	if v.Valid(&Patch{Name: &short}) {
+		t.Error("Valid: short present value must fail")
+	}
+}
+
+// An explicit null is a PRESENT key: it must flow into required and fail, not
+// be skipped as absent (else {"email": null} bypasses sometimes && required).
+func TestSometimesExplicitNull(t *testing.T) {
+	rules := map[string]string{"email": "sometimes && required && email"}
+
+	null := JSON(`{"email": null}`, rules)
+	null.Validate(context.Background())
+	if !null.Fails() {
+		t.Error("explicit JSON null must fail required, not skip as absent")
+	}
+	mapNil := Map(map[string]any{"email": nil}, rules)
+	mapNil.Validate(context.Background())
+	if !mapNil.Fails() {
+		t.Error("a present nil map value must fail required")
+	}
+	missing := JSON(`{}`, rules)
+	missing.Validate(context.Background())
+	if missing.Fails() {
+		t.Errorf("a truly missing key must still skip: %v", missing.Errors().All())
+	}
+}
+
+// sometimes with dive: an absent collection skips element rules too.
+func TestSometimesDive(t *testing.T) {
+	rules := map[string]string{"tags": "sometimes && required && dive && min:2"}
+	absent := Map(map[string]any{}, rules)
+	absent.Validate(context.Background())
+	if absent.Fails() {
+		t.Errorf("absent collection must skip dive rules: %v", absent.Errors().All())
+	}
+	bad := Map(map[string]any{"tags": []any{"ok", "x"}}, rules)
+	bad.Validate(context.Background())
+	if !bad.Fails() {
+		t.Error("present collection must dive-validate elements")
+	}
+}
+
+// sometimes is an always-true marker: under ||/! or in a dive element it is a
+// vacuous-pass / silent no-op, so those placements are compile-time errors.
+func TestSometimesPlacementRejected(t *testing.T) {
+	for name, rule := range map[string]string{
+		"under or":     "sometimes || notblank",
+		"under not":    "!sometimes",
+		"dive element": "dive && sometimes && notblank",
+	} {
+		vd := Map(map[string]any{"x": ""}, map[string]string{"x": rule})
+		vd.Validate(context.Background())
+		if !vd.Fails() {
+			t.Errorf("%s (%q) must be rejected at compile time", name, rule)
+		}
+	}
+	// AddRules fail-fast agrees
+	av := Map(map[string]any{}, map[string]string{})
+	if err := av.AddRules("x", "sometimes || required"); err == nil {
+		t.Error("AddRules must reject sometimes under ||")
+	}
+	if err := av.AddRules("xs", "dive && sometimes"); err == nil {
+		t.Error("AddRules must reject sometimes in a dive element")
+	}
+	// the legal spine placement still compiles
+	if err := av.AddRules("ok", "sometimes && required"); err != nil {
+		t.Errorf("legal sometimes placement must compile: %v", err)
+	}
+}
+
+func TestCheckRules(t *testing.T) {
+	type Good struct {
+		Email string `validate:"required && email"`
+		Inner struct {
+			Port int `validate:"port"`
+		}
+	}
+	if err := CheckRules(Good{}); err != nil {
+		t.Errorf("CheckRules on valid tags: %v", err)
+	}
+	type Bad struct {
+		A string `validate:"required && no_such_rule"`
+		B string `validate:"regex:\"[\""`
+	}
+	err := CheckRules(&Bad{})
+	if err == nil {
+		t.Fatal("CheckRules must report bad tags")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "A:") || !strings.Contains(msg, "B:") {
+		t.Errorf("both bad fields must be reported, got %q", msg)
+	}
+	if err := CheckRules(42); err == nil {
+		t.Error("non-struct input must error")
+	}
+}
+
+func TestRegisterStringFunc(t *testing.T) {
+	v := NewValidator()
+	v.RegisterStringFunc("prefixed", func(s string, args ...string) bool {
+		return len(args) > 0 && strings.HasPrefix(s, args[0])
+	}, "{field} must start with {0}")
+
+	bad := v.Map(map[string]any{"x": "world"}, map[string]string{"x": "prefixed:hello"})
+	bad.Validate(context.Background())
+	if !bad.Fails() {
+		t.Error("prefixed:hello must fail on world")
+	}
+	good := v.Map(map[string]any{"x": "helloworld"}, map[string]string{"x": "prefixed:hello"})
+	good.Validate(context.Background())
+	if good.Fails() {
+		t.Errorf("prefixed:hello must pass on helloworld: %v", good.Errors().All())
+	}
+	// omitempty is pre-applied: empty value never reaches fn
+	empty := v.Map(map[string]any{"x": ""}, map[string]string{"x": "prefixed:hello"})
+	empty.Validate(context.Background())
+	if empty.Fails() {
+		t.Error("RegisterStringFunc must skip empty values")
+	}
+	// non-string values arrive rendered as strings
+	num := v.Map(map[string]any{"x": 12345}, map[string]string{"x": "prefixed:123"})
+	num.Validate(context.Background())
+	if num.Fails() {
+		t.Errorf("numeric value must render as string for fn: %v", num.Errors().All())
+	}
+}
+
+func TestErrorsItemsAndAsErrors(t *testing.T) {
+	vd := Map(map[string]any{"age": "3"}, map[string]string{"age": "min:5", "name": "required"})
+	vd.Validate(context.Background())
+	items := vd.Errors().Items()
+	if len(items) != 2 {
+		t.Fatalf("want 2 items, got %d: %v", len(items), items)
+	}
+	for _, it := range items {
+		if it.Field == "" || it.Rule == "" || it.Message == "" {
+			t.Errorf("item must be fully populated: %+v", it)
+		}
+		if strings.Contains(it.Message, "{field}") || strings.Contains(it.Message, "{0}") {
+			t.Errorf("Items must resolve placeholders, got %q", it.Message)
+		}
+	}
+	// mutating a returned item's params must not corrupt the compiled cache
+	for i := range items {
+		for j := range items[i].Params {
+			items[i].Params[j] = "MUTATED"
+		}
+	}
+	again := vd.Errors().Items()
+	for _, it := range again {
+		for _, p := range it.Params {
+			if p == "MUTATED" {
+				t.Fatal("Items must clone Params")
+			}
+		}
+	}
+
+	// AsErrors extracts the collection from Err(), including wrapped
+	err := vd.Err()
+	if err == nil {
+		t.Fatal("Err must be non-nil on failure")
+	}
+	wrapped := fmt.Errorf("bind failed: %w", err)
+	es, ok := AsErrors(wrapped)
+	if !ok || !es.Has("age") {
+		t.Error("AsErrors must extract through wrapping")
+	}
+	if _, ok := AsErrors(errors.New("plain")); ok {
+		t.Error("AsErrors on a foreign error must be false")
 	}
 }

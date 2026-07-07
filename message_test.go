@@ -179,6 +179,7 @@ func TestTranslationCompleteness(t *testing.T) {
 		"Ja":     translations.Ja(),
 		"Ko":     translations.Ko(),
 		"Es":     translations.Es(),
+		"Ru":     translations.Ru(),
 	}
 	valid := map[string]bool{}
 	for _, r := range Rules() {

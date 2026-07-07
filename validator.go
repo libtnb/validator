@@ -3,6 +3,7 @@ package validator
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/url"
 	"reflect"
@@ -89,6 +90,40 @@ func (v *Validator) RegisterFunc(signature string, fn func(Field) bool, message 
 	validateSignature("rule", signature)
 	v.registry.addRule(funcRule{sig: signature, fn: fn, msg: message})
 	v.invalidateCaches()
+}
+
+// RegisterStringFunc registers a string rule with the built-in conventions
+// pre-applied: empty values pass (omitempty) and the value arrives rendered as
+// a string, so fn only holds the actual check.
+func (v *Validator) RegisterStringFunc(signature string, fn func(value string, args ...string) bool, message string) {
+	v.RegisterFunc(signature, func(f Field) bool {
+		rv := f.Val()
+		if isEmptyV(rv) {
+			return true
+		}
+		return fn(valString(rv), f.Attrs()...)
+	}, message)
+}
+
+// CheckRules eagerly compiles every rule expression reachable from data's
+// struct type (nested and embedded fields included) and reports all bad tags —
+// unknown rules, DSL syntax errors, bad static args — as one joined error.
+// Call it from a test or at startup to catch tag typos before request time.
+func (v *Validator) CheckRules(data any) error {
+	t := reflect.TypeOf(data)
+	if t != nil {
+		t = derefType(t)
+	}
+	if t == nil || t.Kind() != reflect.Struct {
+		return errors.New("validator: CheckRules requires a struct or struct pointer")
+	}
+	var errs []error
+	for _, cf := range v.getStructPlan(t).execPlan {
+		if cf.buildErr != "" {
+			errs = append(errs, errors.New(cf.name+": "+cf.buildErr))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // Any validates a map, a struct (tags are read), or a scalar.

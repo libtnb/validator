@@ -203,3 +203,27 @@ func TestComparisonNamedStringerType(t *testing.T) {
 		t.Error("contains sees the same String() rendering")
 	}
 }
+
+func TestCaseInsensitiveComparisons(t *testing.T) {
+	cases := []struct {
+		r     Rule
+		val   any
+		attrs []string
+		want  bool
+	}{
+		{&inCiRule{}, "ADMIN", []string{"admin", "user"}, true},
+		{&inCiRule{}, "Admin", []string{"admin"}, true},
+		{&inCiRule{}, "root", []string{"admin", "user"}, false},
+		{&inCiRule{}, "", []string{"admin"}, true}, // omitempty
+		{&eqIgnoreCaseRule{}, "Yes", []string{"yes"}, true},
+		{&eqIgnoreCaseRule{}, "no", []string{"yes"}, false},
+		{&eqIgnoreCaseRule{}, "", []string{"yes"}, true}, // omitempty
+		{&neIgnoreCaseRule{}, "Yes", []string{"yes"}, false},
+		{&neIgnoreCaseRule{}, "no", []string{"yes"}, true},
+	}
+	for _, c := range cases {
+		if got := c.r.Passes(fakeField{val: reflect.ValueOf(c.val), attrs: c.attrs}); got != c.want {
+			t.Errorf("%s(%v vs %v)=%v want %v", c.r.Signature(), c.val, c.attrs, got, c.want)
+		}
+	}
+}

@@ -85,7 +85,10 @@ func (vd *validation) prepareFilters() {
 		if ds := vd.validator.splitDive(vd.rules[name]); ds.err == nil && ds.hasDive {
 			continue
 		}
-		if raw, ok := vd.srcLookup(name); ok {
+		// An absent value (missing, nil pointer, explicit null) has nothing to
+		// filter: running the chain would materialize a zero value ("" from
+		// trim(nil)) that SafeBind then writes over the target's data.
+		if raw, ok := vd.srcLookup(name); ok && raw.IsValid() {
 			out, err := vd.applyFilters(chain, valToAny(raw))
 			if err != nil {
 				// a failed filter is a validation failure, never a silent raw value

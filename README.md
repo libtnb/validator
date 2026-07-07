@@ -128,10 +128,17 @@ Args are the `rule:arg` values (`—` = none; `…` = repeatable; `?` = optional
 | `required` | `—` | present and non-nil (non-zero under `WithStrictRequired`) |
 | `filled` | `—` | not empty |
 | `notblank` | `—` | has a non-whitespace character |
+| `sometimes` | `—` | marker: when the field is **absent** (missing key, nil pointer), skip every rule on the field — `"sometimes && required && email"` gives PATCH semantics |
 | `required_if` | `field,val…` | required when `field` equals any listed value |
 | `required_unless` | `field,val…` | required unless `field` equals any listed value |
 | `required_with` | `field…` | required when any listed field is present |
 | `required_without` | `field…` | required when any listed field is missing |
+| `required_with_all` | `field…` | required when **all** listed fields are present |
+| `required_without_all` | `field…` | required when **all** listed fields are missing |
+| `excluded_if` | `field,val…` | must be empty when `field` equals any listed value |
+| `excluded_unless` | `field,val…` | must be empty unless `field` equals any listed value |
+| `excluded_with` | `field…` | must be empty when any listed field is present |
+| `excluded_without` | `field…` | must be empty when any listed field is missing |
 
 **String**
 
@@ -153,16 +160,49 @@ Args are the `rule:arg` values (`—` = none; `…` = repeatable; `?` = optional
 | --- | --- | --- |
 | `email` | `—` | a valid email address |
 | `url` / `uri` | `—` | a valid URL / URI |
-| `uuid` | `—` | a valid UUID |
+| `uuid` / `ulid` | `—` | a valid UUID / ULID |
 | `ip` / `ipv4` / `ipv6` | `—` | a valid IP / IPv4 / IPv6 address |
+| `cidr` / `cidrv4` / `cidrv6` | `—` | valid CIDR notation (any / IPv4 / IPv6) |
+| `mac` | `—` | a valid MAC address |
+| `hostname` / `fqdn` | `—` | a valid RFC 1123 hostname / FQDN (TLD required) |
+| `port` | `—` | an integer port in `[1, 65535]` |
+| `e164` | `—` | an E.164 phone number (`+14155552671`) |
 | `json` | `—` | valid JSON |
 | `base64` | `—` | a valid base64 string |
-| `mac` | `—` | a valid MAC address |
-| `hostname` | `—` | a valid RFC 1123 hostname |
+| `jwt` | `—` | a three-segment JWT shape |
+| `semver` | `—` | a semantic version (`1.2.3-rc.1`) |
+| `hexcolor` | `—` | a hex color (`#fff`, `#ffaa00cc`) |
+| `latitude` / `longitude` | `—` | a decimal coordinate in range |
+| `timezone` | `—` | an IANA time zone name (`Asia/Shanghai`) |
+| `luhn` | `—` | digits passing the Luhn checksum |
+| `credit_card` | `—` | a 12-19 digit card number passing Luhn |
 | `datetime` | `layout?` | parses with the Go time layout (default layouts if omitted) |
 | `date` | `—` | a valid date |
 | `regex` | `pattern` | matches the pattern |
 | `not_regex` | `pattern` | does not match the pattern |
+
+**Time** — an arg that parses as a date is always a **literal** bound
+(`after:2026-01-01`; input keys can never shadow it), otherwise it resolves as
+a sibling **field name** (`after:Start`). Values may be `time.Time`, date
+strings, or unix timestamps.
+
+| Rule | Args | Passes when |
+| --- | --- | --- |
+| `after` / `after_or_equal` | `field\|date` | a date after (or equal to) the reference |
+| `before` / `before_or_equal` | `field\|date` | a date before (or equal to) the reference |
+
+**File** (`*multipart.FileHeader` fields; `ext` also accepts filename strings)
+
+| Rule | Args | Passes when |
+| --- | --- | --- |
+| `ext` | `jpg,png,…` | the filename has one of the extensions (case-insensitive) |
+| `mimetypes` | `type…` | the **sniffed content** (first 512 bytes, not the client header) matches; `image/*` wildcards work |
+| `filemin` / `filemax` | `size` | file size ≥ / ≤ `size` (`512kb`, `10mb`, `1.5gb`; 1024-based) |
+
+Content starting with markup (`<` + letter/`!`/`/`/`?`) is never sniffed as
+`text/plain` — `<svg onload=…>` and unlisted tags cannot pass a plain-text
+allowlist (stricter than `http.DetectContentType`). Literal `<` in prose
+(`a < b`, `<3`) stays plain text.
 
 **Numeric / size** — *size* = value for numbers, rune length for strings (see [above](#semantics)); `n` is a number.
 
@@ -182,9 +222,11 @@ Args are the `rule:arg` values (`—` = none; `…` = repeatable; `?` = optional
 
 | Rule | Args | Passes when |
 | --- | --- | --- |
-| `in` | `a,b,…` | equals one of the values |
+| `in` / `in_ci` | `a,b,…` | equals one of the values (`_ci` = case-insensitive) |
 | `not_in` | `a,b,…` | equals none of the values |
 | `eq` / `ne` | `v` | equals / does not equal `v` |
+| `eq_ignore_case` / `ne_ignore_case` | `v` | case-insensitive equals / not equals |
+| `unique` | `—` | a slice/array has no duplicate elements (a map no duplicate values) |
 
 **Cross-field**
 
@@ -192,8 +234,8 @@ Args are the `rule:arg` values (`—` = none; `…` = repeatable; `?` = optional
 | --- | --- | --- |
 | `same` / `eqfield` | `field` | equals another field |
 | `different` / `nefield` | `field` | differs from another field |
-| `gtfield` / `gtefield` | `field` | numerically > / ≥ another field |
-| `ltfield` / `ltefield` | `field` | numerically < / ≤ another field |
+| `gtfield` / `gtefield` | `field` | > / ≥ another field (numbers, or `time.Time` pairs chronologically) |
+| `ltfield` / `ltefield` | `field` | < / ≤ another field (numbers, or `time.Time` pairs chronologically) |
 | `confirmed` | `—` | `<field>_confirmation` exists and matches |
 
 **Filters** (transform the value before validation / `SafeBind`)
@@ -216,6 +258,12 @@ or `f.Val().Interface()` to get the value as `any` for the `conv` helpers.
 ```go
 v := validator.NewValidator()
 
+// string style — omitempty and string rendering are pre-applied,
+// fn holds only the actual check
+v.RegisterStringFunc("slug", func(s string, args ...string) bool {
+    return !strings.Contains(s, " ")
+}, "The {field} must be a slug.")
+
 // function style — read the value via reflect.Value (0-alloc)
 v.RegisterFunc("even", func(f validator.Field) bool {
     rv := f.Val()
@@ -228,6 +276,21 @@ v.RegisterRule(&MyRule{})
 
 Rules that need a `context.Context` or return an error (e.g. a DB uniqueness
 check) implement `validator.ErrorRule` instead and read `f.Context()`.
+
+## Structured errors & tag linting
+
+```go
+vd.Errors().Items()             // []FieldError{Field, Rule, Message, Params} — build API error payloads
+es, ok := validator.AsErrors(err) // recover the collection from a (wrapped) Validation.Err()
+
+// catch tag typos in a test instead of at request time:
+// unknown rules, DSL syntax errors and bad static args, all fields at once
+func TestRequestTags(t *testing.T) {
+    if err := validator.CheckRules(CreateUserRequest{}); err != nil {
+        t.Fatal(err)
+    }
+}
+```
 
 ## Messages, attributes & i18n
 

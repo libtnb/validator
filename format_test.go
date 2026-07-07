@@ -303,3 +303,45 @@ func TestDatetimeArglessMessage(t *testing.T) {
 		t.Errorf("arg-less datetime message must not contain a raw placeholder, got %q", msg)
 	}
 }
+
+// New format rules: pass/fail/omitempty per rule (empty and nil always pass).
+func TestNewFormatRules(t *testing.T) {
+	cases := []struct {
+		r    Rule
+		good []any
+		bad  []any
+	}{
+		{&e164Rule{}, []any{"+14155552671", "+8613800138000"}, []any{"14155552671", "+0123", "+1 415 555", "abc"}},
+		{&semverRule{}, []any{"1.2.3", "0.1.0-alpha.1", "2.0.0+build.5"}, []any{"v1.2.3", "1.2", "1.02.3"}},
+		{&ulidRule{}, []any{"01ARZ3NDEKTSV4RRFFQ69G5FAV", "01arz3ndektsv4rrffq69g5fav"}, []any{"01ARZ3NDEKTSV4RRFFQ69G5FA", "01ARZ3NDEKTSV4RRFFQ69G5FAI"}},
+		{&jwtRule{}, []any{"eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.dQw4w9WgXcQ"}, []any{"onlyone", "a.b", "a b.c.d"}},
+		{&hexColorRule{}, []any{"#fff", "#FFAA00", "#ffaa00cc", "#abcd"}, []any{"fff", "#ggg", "#12345"}},
+		{&fqdnRule{}, []any{"example.com", "sub.example.co.uk", "example.com.", "xn--fiqs8s.cn"}, []any{"localhost", "-bad.com", "bad-.example.com", "bad.-example.com", "example"}},
+		{&latitudeRule{}, []any{"45.5", "-90", "+89.9", 45.5, 90}, []any{"90.1", "-91", "abc", 91}},
+		{&longitudeRule{}, []any{"180", "-179.99", "0", -73.98}, []any{"180.1", "-181", "abc"}},
+		{&timezoneRule{}, []any{"UTC", "Asia/Shanghai"}, []any{"Local", "Not/AZone"}},
+		{&portRule{}, []any{"80", 443, "65535", uint16(8080)}, []any{"0", 65536, "-1", "8080.5", "abc"}},
+		{&cidrRule{}, []any{"10.0.0.0/8", "2001:db8::/32"}, []any{"10.0.0.0", "10.0.0.0/33", "abc"}},
+		{&cidrv4Rule{}, []any{"192.168.1.0/24"}, []any{"2001:db8::/32", "192.168.1.0"}},
+		{&cidrv6Rule{}, []any{"2001:db8::/32"}, []any{"192.168.1.0/24"}},
+		{&luhnRule{}, []any{"79927398713", "4539578763621486"}, []any{"79927398710", "123a"}},
+		{&creditCardRule{}, []any{"4539578763621486", "4539 5787 6362 1486", "4539-5787-6362-1486"}, []any{"4539578763621487", "123", "4539x578763621486"}},
+	}
+	for _, c := range cases {
+		sig := c.r.Signature()
+		for _, g := range c.good {
+			if !c.r.Passes(fakeField{val: reflect.ValueOf(g)}) {
+				t.Errorf("%s(%v) should pass", sig, g)
+			}
+		}
+		for _, b := range c.bad {
+			if c.r.Passes(fakeField{val: reflect.ValueOf(b)}) {
+				t.Errorf("%s(%v) should fail", sig, b)
+			}
+		}
+		// omitempty: empty string and nil pass
+		if !c.r.Passes(fakeField{val: reflect.ValueOf("")}) || !c.r.Passes(fakeField{val: reflect.ValueOf(nil)}) {
+			t.Errorf("%s must pass empty values (omitempty)", sig)
+		}
+	}
+}

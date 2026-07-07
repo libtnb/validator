@@ -1,6 +1,7 @@
 package validator
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"strings"
@@ -96,12 +97,18 @@ func (vd *validation) checkExpr(expr string) error {
 	if ds.nested {
 		return fmt.Errorf("validator: multiple top-level 'dive' is not supported")
 	}
-	for _, sub := range []string{ds.container, ds.element} {
-		if strings.TrimSpace(sub) == "" {
-			continue
-		}
-		if _, err := vd.validator.compile(sub); err != nil {
+	if strings.TrimSpace(ds.container) != "" {
+		if _, err := vd.validator.compile(ds.container); err != nil {
 			return err
+		}
+	}
+	if ds.hasDive && strings.TrimSpace(ds.element) != "" {
+		e, err := vd.validator.compile(ds.element)
+		if err != nil {
+			return err
+		}
+		if e.sometimes {
+			return errors.New(errSometimesInDive)
 		}
 	}
 	return nil

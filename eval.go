@@ -35,6 +35,9 @@ func (vd *validation) evalField(name, expr string, ctx context.Context, dst []Fi
 		if err != nil {
 			return append(dst, vd.diag(name, err.Error()))
 		}
+		if e.sometimes {
+			return append(dst, vd.diag(name, errSometimesInDive))
+		}
 		element = e
 	}
 	return vd.evalCompiledField(compiledField{name: name, container: container, element: element, hasDive: ds.hasDive}, ctx, dst)
@@ -52,6 +55,9 @@ func (vd *validation) evalCompiledField(cf compiledField, ctx context.Context, d
 	if cf.buildErr != "" {
 		return append(dst, vd.diag(cf.name, cf.buildErr))
 	}
+	if vd.sometimesAbsent(cf) {
+		return out
+	}
 	if cf.container != nil {
 		var cval reflect.Value
 		if cf.hasDive {
@@ -66,6 +72,22 @@ func (vd *validation) evalCompiledField(cf compiledField, ctx context.Context, d
 		out = vd.evalDive(cf.name, cf.element, vd.rawValue(cf), ctx, out)
 	}
 	return out
+}
+
+// sometimesAbsent: a "sometimes" marker on the container expression skips the
+// whole field (value and dive rules) when the field is absent. For a struct
+// source fields always exist, so absence is a nil pointer; for map/var sources
+// absence is a MISSING KEY — a present key holding an explicit null stays
+// present, flows into required and fails there (PATCH semantics).
+func (vd *validation) sometimesAbsent(cf compiledField) bool {
+	if cf.container == nil || !cf.container.sometimes {
+		return false
+	}
+	if vd.ssPlan != nil {
+		return !vd.rawValue(cf).IsValid()
+	}
+	_, found := vd.srcLookup(cf.name)
+	return !found
 }
 
 func (vd *validation) rawValue(cf compiledField) reflect.Value {
@@ -248,6 +270,9 @@ func (vd *validation) validFast(ctx context.Context) (ok bool) {
 func (vd *validation) fieldPasses(cf compiledField, ctx context.Context) bool {
 	if cf.buildErr != "" {
 		return false
+	}
+	if vd.sometimesAbsent(cf) {
+		return true
 	}
 	if cf.container != nil {
 		var cval reflect.Value

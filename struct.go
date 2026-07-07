@@ -219,6 +219,11 @@ func (v *Validator) buildCompiledField(name, expr string) compiledField {
 			cf.buildErr = err.Error()
 			return cf
 		}
+		if e.sometimes {
+			// elements always exist inside their collection: a silent no-op, so reject
+			cf.buildErr = errSometimesInDive
+			return cf
+		}
 		cf.element = e
 	}
 	return cf

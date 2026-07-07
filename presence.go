@@ -5,16 +5,18 @@ import (
 	"strings"
 )
 
-func init() { registerRules(&requiredRule{}, &filledRule{}, &notBlankRule{}) }
+func init() { registerRules(&requiredRule{}, &filledRule{}, &notBlankRule{}, &sometimesRule{}) }
 
 var (
 	_ Rule = (*requiredRule)(nil)
 	_ Rule = (*filledRule)(nil)
 	_ Rule = (*notBlankRule)(nil)
+	_ Rule = (*sometimesRule)(nil)
 
 	_ leafCompiler = (*requiredRule)(nil)
 	_ leafCompiler = (*filledRule)(nil)
 	_ leafCompiler = (*notBlankRule)(nil)
+	_ leafCompiler = (*sometimesRule)(nil)
 )
 
 // strictForm yields a strict variant, swapped in under WithStrictRequired.
@@ -52,6 +54,20 @@ func (r *notBlankRule) Passes(f Field) bool {
 func (r *notBlankRule) Message() string { return "The {field} field must not be blank." }
 
 func (r *notBlankRule) compilePasses([]string) func(Field) bool { return r.Passes }
+
+// sometimesRule is a marker: on the AND spine it makes the engine skip the whole
+// field when the value is absent (missing key, nil pointer). PATCH semantics:
+// "sometimes && required && email" validates only when the key is provided.
+// As a leaf it always passes; the skip happens in the engine (see compiled.sometimes).
+type sometimesRule struct{}
+
+func (r *sometimesRule) Signature() string { return "sometimes" }
+
+func (r *sometimesRule) Passes(Field) bool { return true }
+
+func (r *sometimesRule) Message() string { return "The {field} is invalid." }
+
+func (r *sometimesRule) compilePasses([]string) func(Field) bool { return r.Passes }
 
 // present is the shared required-family check: valid and non-nil (typed-nil counts as
 // absent), strict additionally requiring non-zero.

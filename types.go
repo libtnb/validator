@@ -67,6 +67,8 @@ type Errors interface {
 	// Messages returns field's rule->message map.
 	Messages(field string) map[string]string
 	All() map[string]map[string]string
+	// Items returns every failure in evaluation order with resolved messages.
+	Items() []FieldError
 	Has(field string) bool
 	// String aggregates all messages (fields sorted), or "" when none failed.
 	String() string

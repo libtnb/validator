@@ -13,13 +13,21 @@ var (
 	errorIType   = reflect.TypeFor[error]()
 )
 
-func init() { registerRules(&inRule{}, &notInRule{}, &eqRule{}, &neRule{}) }
+func init() {
+	registerRules(
+		&inRule{}, &notInRule{}, &inCiRule{},
+		&eqRule{}, &neRule{}, &eqIgnoreCaseRule{}, &neIgnoreCaseRule{},
+	)
+}
 
 var (
 	_ Rule = (*inRule)(nil)
 	_ Rule = (*notInRule)(nil)
+	_ Rule = (*inCiRule)(nil)
 	_ Rule = (*eqRule)(nil)
 	_ Rule = (*neRule)(nil)
+	_ Rule = (*eqIgnoreCaseRule)(nil)
+	_ Rule = (*neIgnoreCaseRule)(nil)
 )
 
 // inRule: value must be one of the args.
@@ -57,6 +65,40 @@ func (r *neRule) Signature() string { return "ne" }
 func (r *neRule) Passes(f Field) bool { return eqArg(f, false, true) }
 
 func (r *neRule) Message() string { return "The {field} must not be equal to {0}." }
+
+// inCiRule: value must case-insensitively equal one of the args.
+type inCiRule struct{}
+
+func (r *inCiRule) Signature() string { return "in_ci" }
+
+func (r *inCiRule) Passes(f Field) bool {
+	rv := f.Val()
+	if isEmptyV(rv) {
+		return true
+	}
+	vs := cmpString(rv)
+	return slices.ContainsFunc(f.Attrs(), func(a string) bool { return strings.EqualFold(a, vs) })
+}
+
+func (r *inCiRule) Message() string { return "The selected {field} is invalid." }
+
+// eqIgnoreCaseRule: value must case-insensitively equal the arg.
+type eqIgnoreCaseRule struct{}
+
+func (r *eqIgnoreCaseRule) Signature() string { return "eq_ignore_case" }
+
+func (r *eqIgnoreCaseRule) Passes(f Field) bool { return eqFoldArg(f, true, false) }
+
+func (r *eqIgnoreCaseRule) Message() string { return "The {field} must be equal to {0}." }
+
+// neIgnoreCaseRule: value must not case-insensitively equal the arg.
+type neIgnoreCaseRule struct{}
+
+func (r *neIgnoreCaseRule) Signature() string { return "ne_ignore_case" }
+
+func (r *neIgnoreCaseRule) Passes(f Field) bool { return eqFoldArg(f, false, true) }
+
+func (r *neIgnoreCaseRule) Message() string { return "The {field} must not be equal to {0}." }
 
 // cmpString renders rv byte-identically to conv.ToString: a named String()/Error()
 // type renders via that method; plain builtins keep the 0-alloc kind path.
@@ -136,4 +178,17 @@ func eqArg(f Field, equal, whenNoArg bool) bool {
 		return whenNoArg
 	}
 	return argMatches(rv, cmpString(rv), attrs[0]) == equal
+}
+
+// eqFoldArg is eqArg's case-insensitive form (string comparison only).
+func eqFoldArg(f Field, equal, whenNoArg bool) bool {
+	rv := f.Val()
+	if isEmptyV(rv) {
+		return true
+	}
+	attrs := f.Attrs()
+	if len(attrs) == 0 {
+		return whenNoArg
+	}
+	return strings.EqualFold(cmpString(rv), attrs[0]) == equal
 }

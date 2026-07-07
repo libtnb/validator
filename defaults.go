@@ -33,3 +33,6 @@ func URLValues(data url.Values, rules map[string]string) Validation {
 func Any(data any) Validation { return defaultValidator().Any(data) }
 
 func Var(value any, rule string) Validation { return defaultValidator().Var(value, rule) }
+
+// CheckRules reports every bad rule tag on data's struct type; see Validator.CheckRules.
+func CheckRules(data any) error { return defaultValidator().CheckRules(data) }

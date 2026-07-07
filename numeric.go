@@ -32,6 +32,8 @@ var (
 	_ Rule = (*numericRule)(nil)
 	_ Rule = (*numberRule)(nil)
 	_ Rule = (*booleanRule)(nil)
+
+	_ leafCompiler = (*digitsRule)(nil)
 )
 
 // numericHintForm marks size rules whose string comparison switches from rune
@@ -174,19 +176,37 @@ type digitsRule struct{}
 func (r *digitsRule) Signature() string { return "digits" }
 
 func (r *digitsRule) Passes(f Field) bool {
-	if isEmptyV(f.Val()) {
-		return true
-	}
 	attrs := f.Attrs()
 	if len(attrs) < 1 {
-		return false
+		return isEmptyV(f.Val())
 	}
-
 	want, err := strconv.ParseInt(strings.TrimSpace(attrs[0]), 10, 64)
 	if err != nil {
-		return false
+		return isEmptyV(f.Val())
 	}
-	s := valString(f.Val())
+	return digitsCheck(f, want)
+}
+
+// compilePasses pre-parses the length so evaluation never re-parses the arg.
+func (r *digitsRule) compilePasses(args []string) func(Field) bool {
+	if len(args) < 1 {
+		return nil // fall back to the generic path (fails closed on non-empty)
+	}
+	want, err := strconv.ParseInt(strings.TrimSpace(args[0]), 10, 64)
+	if err != nil {
+		return nil
+	}
+	return func(f Field) bool { return digitsCheck(f, want) }
+}
+
+func (r *digitsRule) Message() string { return "The {field} field must be {0} digits." }
+
+func digitsCheck(f Field, want int64) bool {
+	rv := f.Val()
+	if isEmptyV(rv) {
+		return true
+	}
+	s := valString(rv)
 	if int64(len(s)) != want {
 		return false
 	}
@@ -197,8 +217,6 @@ func (r *digitsRule) Passes(f Field) bool {
 	}
 	return true
 }
-
-func (r *digitsRule) Message() string { return "The {field} field must be {0} digits." }
 
 // numericRule: value is a number or numeric string.
 type numericRule struct{}

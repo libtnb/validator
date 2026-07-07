@@ -1,6 +1,7 @@
 package validator
 
 import (
+	"context"
 	"reflect"
 	"testing"
 )
@@ -313,6 +314,8 @@ func TestConfirmed(t *testing.T) {
 func TestCrossfieldContracts(t *testing.T) {
 	rs := []Rule{
 		&requiredIfRule{}, &requiredUnlessRule{}, &requiredWithRule{}, &requiredWithoutRule{},
+		&requiredWithAllRule{}, &requiredWithoutAllRule{},
+		&excludedIfRule{}, &excludedUnlessRule{}, &excludedWithRule{}, &excludedWithoutRule{},
 		&sameRule{}, &differentRule{}, &eqFieldRule{}, &neFieldRule{},
 		&gtFieldRule{}, &gteFieldRule{}, &ltFieldRule{}, &lteFieldRule{}, &confirmedRule{},
 	}
@@ -323,5 +326,94 @@ func TestCrossfieldContracts(t *testing.T) {
 		if r.Message() == "" {
 			t.Errorf("%T: empty message", r)
 		}
+	}
+}
+
+func TestRequiredWithAll(t *testing.T) {
+	run := func(data map[string]any, rule string) bool {
+		vd := Map(data, map[string]string{"x": rule})
+		vd.Validate(context.Background())
+		return !vd.Fails()
+	}
+	// required only when BOTH a and b are present
+	if run(map[string]any{"a": "1", "b": "2"}, "required_with_all:a,b") {
+		t.Error("x missing while a AND b present must fail")
+	}
+	if !run(map[string]any{"a": "1"}, "required_with_all:a,b") {
+		t.Error("only a present: x is not required")
+	}
+	// required_without_all: required only when BOTH absent
+	if run(map[string]any{}, "required_without_all:a,b") {
+		t.Error("a and b both absent: x is required")
+	}
+	if !run(map[string]any{"a": "1"}, "required_without_all:a,b") {
+		t.Error("a present: x is not required")
+	}
+}
+
+// Missing args make conditional rules pass vacuously, so arity is a compile-time error.
+func TestConditionalRuleArity(t *testing.T) {
+	bad := []string{
+		"excluded_if:role", "excluded_unless:role", "excluded_with", "excluded_without",
+		"required_if:role", "required_unless:role", "required_with", "required_without",
+		"required_with_all", "required_without_all",
+	}
+	for _, rule := range bad {
+		vd := Map(map[string]any{"x": "v"}, map[string]string{"x": rule})
+		vd.Validate(context.Background())
+		if !vd.Fails() {
+			t.Errorf("%q with missing args must be a compile-time error", rule)
+		}
+		av := Map(map[string]any{}, map[string]string{})
+		if err := av.AddRules("x", rule); err == nil {
+			t.Errorf("AddRules must reject %q", rule)
+		}
+	}
+	// legal arity still compiles
+	ok := Map(map[string]any{"x": "v", "role": "admin"}, map[string]string{"x": "excluded_if:role,other"})
+	ok.Validate(context.Background())
+	if ok.Fails() {
+		t.Errorf("legal excluded_if must compile and pass: %v", ok.Errors().All())
+	}
+}
+
+func TestExcludedFamily(t *testing.T) {
+	run := func(data map[string]any, rule string) bool {
+		vd := Map(data, map[string]string{"x": rule})
+		vd.Validate(context.Background())
+		return !vd.Fails()
+	}
+	// excluded_if: x must be empty when mode=off
+	if run(map[string]any{"x": "v", "mode": "off"}, "excluded_if:mode,off") {
+		t.Error("x present while mode=off must fail excluded_if")
+	}
+	if !run(map[string]any{"x": "v", "mode": "on"}, "excluded_if:mode,off") {
+		t.Error("mode=on: x may be present")
+	}
+	if !run(map[string]any{"mode": "off"}, "excluded_if:mode,off") {
+		t.Error("empty x always passes excluded_if")
+	}
+	// excluded_unless: x must be empty unless mode=admin
+	if run(map[string]any{"x": "v", "mode": "user"}, "excluded_unless:mode,admin") {
+		t.Error("mode!=admin: x must be empty")
+	}
+	if !run(map[string]any{"x": "v", "mode": "admin"}, "excluded_unless:mode,admin") {
+		t.Error("mode=admin: x may be present")
+	}
+	if run(map[string]any{"x": "v"}, "excluded_unless:mode,admin") {
+		t.Error("absent sibling cannot match: exclusion applies")
+	}
+	// excluded_with / excluded_without
+	if run(map[string]any{"x": "v", "other": "y"}, "excluded_with:other") {
+		t.Error("other present: x must be empty")
+	}
+	if !run(map[string]any{"x": "v"}, "excluded_with:other") {
+		t.Error("other absent: x may be present")
+	}
+	if run(map[string]any{"x": "v"}, "excluded_without:other") {
+		t.Error("other absent: x must be empty")
+	}
+	if !run(map[string]any{"x": "v", "other": "y"}, "excluded_without:other") {
+		t.Error("other present: x may be present")
 	}
 }

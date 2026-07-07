@@ -1,6 +1,8 @@
 package validator
 
 import (
+	"errors"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -78,6 +80,19 @@ func (e *validationErrors) Messages(field string) map[string]string {
 
 func (e *validationErrors) All() map[string]map[string]string { return e.build() }
 
+// Items returns resolved copies (Params cloned: the backing slices are shared
+// with the compiled expression cache).
+func (e *validationErrors) Items() []FieldError {
+	out := make([]FieldError, len(e.items))
+	for i := range e.items {
+		it := e.items[i]
+		it.Message = e.message(i)
+		it.Params = slices.Clone(it.Params)
+		out[i] = it
+	}
+	return out
+}
+
 func (e *validationErrors) Has(field string) bool {
 	for _, it := range e.items {
 		if it.Field == field {
@@ -93,12 +108,14 @@ func (e *validationErrors) Error() string {
 	if len(e.items) == 0 {
 		return ""
 	}
-	seen := make(map[string]bool, len(e.items))
+	// single pass: resolve each field's first message once, then sort fields
+	first := make(map[string]string, len(e.items))
 	fields := make([]string, 0, len(e.items))
-	for _, it := range e.items {
-		if !seen[it.Field] {
-			seen[it.Field] = true
-			fields = append(fields, it.Field)
+	for i := range e.items {
+		f := e.items[i].Field
+		if _, ok := first[f]; !ok {
+			first[f] = e.message(i)
+			fields = append(fields, f)
 		}
 	}
 	sort.Strings(fields)
@@ -110,9 +127,19 @@ func (e *validationErrors) Error() string {
 		}
 		b.WriteString(f)
 		b.WriteString(": ")
-		b.WriteString(e.OneFor(f))
+		b.WriteString(first[f])
 	}
 	return b.String()
+}
+
+// AsErrors extracts the Errors collection from an error returned by
+// Validation.Err (works through wrapping via errors.As).
+func AsErrors(err error) (Errors, bool) {
+	var ve *validationErrors
+	if errors.As(err, &ve) {
+		return ve, true
+	}
+	return nil, false
 }
 
 // appendGrown appends, using first-allocation cap 4 to skip the 1->2->4 realloc ladder.

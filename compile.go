@@ -6,6 +6,9 @@ import (
 	"github.com/libtnb/validator/internal/dsl"
 )
 
+// errSometimesInDive rejects "sometimes" in a dive element segment, where it is a silent no-op.
+const errSometimesInDive = `validator: "sometimes" applies to the field itself, not dive elements`
+
 // resolver looks up a rule by signature; errRule wins when non-nil, ok=false fails compile.
 type resolver func(signature string) (rule Rule, errRule ErrorRule, ok bool)
 
@@ -13,6 +16,9 @@ type resolver func(signature string) (rule Rule, errRule ErrorRule, ok bool)
 type compiled struct {
 	Fast func(f Field) bool
 	Diag func(f Field, dst []FieldError) (bool, []FieldError)
+	// sometimes: a "sometimes" marker on the AND spine; the engine skips the
+	// whole field when its value is absent.
+	sometimes bool
 }
 
 type compiledNode struct {
@@ -44,11 +50,16 @@ func (a argsField) Attrs() []string { return a.args }
 
 // compile turns an AST into a compiled program; unknown rules yield a *dsl.ParseError.
 func compile(node dsl.Node, resolve resolver) (*compiled, error) {
+	// "sometimes" is an always-true marker: under || it swallows the whole
+	// branch and under ! it is always false — both are config errors, fail fast.
+	if countLeaf(node, "sometimes") != countSpineLeaf(node, "sometimes") {
+		return nil, &dsl.ParseError{Msg: `"sometimes" must be joined at the top level by && (not under || or !)`}
+	}
 	cn, err := compileNode(node, resolve, hasNumericAssertion(node))
 	if err != nil {
 		return nil, err
 	}
-	return &compiled{Fast: cn.fast, Diag: cn.diag}, nil
+	return &compiled{Fast: cn.fast, Diag: cn.diag, sometimes: hasSpineLeaf(node, "sometimes")}, nil
 }
 
 func compileNode(node dsl.Node, resolve resolver, numericHint bool) (compiledNode, error) {
@@ -245,6 +256,46 @@ func hasNumericAssertion(node dsl.Node) bool {
 		return hasNumericAssertion(nd.L) || hasNumericAssertion(nd.R)
 	}
 	return false
+}
+
+// hasSpineLeaf reports a leaf named name on the top-level AND spine (not under || or !).
+func hasSpineLeaf(node dsl.Node, name string) bool {
+	switch nd := node.(type) {
+	case dsl.Leaf:
+		return nd.Name == name
+	case dsl.And:
+		return hasSpineLeaf(nd.L, name) || hasSpineLeaf(nd.R, name)
+	}
+	return false
+}
+
+// countSpineLeaf counts name leaves on the AND spine; countLeaf counts them anywhere.
+func countSpineLeaf(node dsl.Node, name string) int {
+	switch nd := node.(type) {
+	case dsl.Leaf:
+		if nd.Name == name {
+			return 1
+		}
+	case dsl.And:
+		return countSpineLeaf(nd.L, name) + countSpineLeaf(nd.R, name)
+	}
+	return 0
+}
+
+func countLeaf(node dsl.Node, name string) int {
+	switch nd := node.(type) {
+	case dsl.Leaf:
+		if nd.Name == name {
+			return 1
+		}
+	case dsl.And:
+		return countLeaf(nd.L, name) + countLeaf(nd.R, name)
+	case dsl.Or:
+		return countLeaf(nd.L, name) + countLeaf(nd.R, name)
+	case dsl.Not:
+		return countLeaf(nd.X, name)
+	}
+	return 0
 }
 
 func flattenOr(n dsl.Or) []dsl.Node {

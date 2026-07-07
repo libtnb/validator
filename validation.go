@@ -109,8 +109,8 @@ func (vd *validation) Validate(ctx context.Context) {
 	if cap(names) < len(vd.rules) {
 		names = make([]string, 0, len(vd.rules))
 	}
-	for name := range vd.rules {
-		if strings.TrimSpace(vd.rules[name]) != "" {
+	for name, expr := range vd.rules {
+		if strings.TrimSpace(expr) != "" {
 			names = append(names, name)
 		}
 	}
