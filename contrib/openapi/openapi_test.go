@@ -100,3 +100,27 @@ func TestDocsHTML(t *testing.T) {
 		t.Errorf("docs page should embed the spec url and scalar:\n%s", html)
 	}
 }
+
+type envelope[T any] struct {
+	Msg  string `json:"msg"`
+	Data T      `json:"data"`
+}
+
+func TestNestedGenericComponentNames(t *testing.T) {
+	g := openapi.New("t", "1")
+	if err := g.Add(http.MethodGet, "/x", openapi.Op{Response: envelope[page]{}}); err != nil {
+		t.Fatal(err)
+	}
+	blob, _ := g.JSON()
+	if !strings.Contains(string(blob), `"#/components/schemas/envelopepage"`) && !strings.Contains(string(blob), `envelopepage`) {
+		t.Errorf("nested generic names should flatten cleanly:\n%s", blob)
+	}
+	if strings.ContainsAny(string(blob), "[]") {
+		// brackets may legitimately appear in JSON arrays; check schema keys only
+		for name := range g.Document().Components.Schemas {
+			if strings.ContainsAny(name, "[]*,") {
+				t.Errorf("component name %q contains raw type syntax", name)
+			}
+		}
+	}
+}

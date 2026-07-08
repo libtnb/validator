@@ -118,20 +118,18 @@ func jsonName(field reflect.StructField) string {
 }
 
 // componentName derives a readable, unique component name from a type,
-// flattening generic instantiations: Page[biz.User] -> PageUser.
+// flattening generic instantiations of any depth:
+// Envelope[Page[biz.User]] -> EnvelopePageUser.
 func componentName(t reflect.Type) string {
-	name := t.Name()
-	if i := strings.IndexByte(name, '['); i >= 0 {
-		base := name[:i]
-		args := name[i+1 : len(name)-1]
-		var parts []string
-		for arg := range strings.SplitSeq(args, ",") {
-			if j := strings.LastIndexByte(arg, '.'); j >= 0 {
-				arg = arg[j+1:]
-			}
-			parts = append(parts, strings.TrimSpace(arg))
+	segments := strings.FieldsFunc(t.Name(), func(r rune) bool {
+		return r == '[' || r == ']' || r == ',' || r == '*' || r == ' '
+	})
+	var b strings.Builder
+	for _, segment := range segments {
+		if j := strings.LastIndexByte(segment, '.'); j >= 0 {
+			segment = segment[j+1:]
 		}
-		name = base + strings.Join(parts, "")
+		b.WriteString(segment)
 	}
-	return name
+	return b.String()
 }
