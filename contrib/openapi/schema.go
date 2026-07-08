@@ -122,7 +122,7 @@ func jsonName(field reflect.StructField) string {
 // Envelope[Page[biz.User]] -> EnvelopePageUser.
 func componentName(t reflect.Type) string {
 	segments := strings.FieldsFunc(t.Name(), func(r rune) bool {
-		return r == '[' || r == ']' || r == ',' || r == '*' || r == ' '
+		return r == '[' || r == ']' || r == '{' || r == '}' || r == ',' || r == '*' || r == ' '
 	})
 	var b strings.Builder
 	for _, segment := range segments {
