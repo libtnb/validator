@@ -46,7 +46,10 @@ func (v *Validator) DescribeRules(data any) ([]FieldRules, error) {
 	sp := v.getStructPlan(t)
 	out := make([]FieldRules, 0, len(sp.entries))
 	for _, fp := range sp.entries {
-		if !fp.leaf || fp.dead || strings.TrimSpace(fp.rules) == "" {
+		// non-leaf entries (struct-valued fields, embedded structs) carry rules
+		// too — `Profile *Profile validate:"required"` is enforced at runtime,
+		// so filtering on leaf would hide it from consumers.
+		if fp.dead || strings.TrimSpace(fp.rules) == "" {
 			continue
 		}
 

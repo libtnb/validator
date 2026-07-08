@@ -52,3 +52,6 @@ __debug_bin
 
 # Fuzz corpus
 testdata/fuzz/
+
+go.work
+go.work.sum

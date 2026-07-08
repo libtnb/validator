@@ -940,6 +940,33 @@ func TestRegisterStringFunc(t *testing.T) {
 	}
 }
 
+// DescribeRules must report rules on struct-valued (non-leaf) fields:
+// `Profile *Profile validate:"required"` is enforced at runtime, so hiding it
+// from introspection would let an OpenAPI consumer publish a false contract.
+func TestDescribeRulesStructField(t *testing.T) {
+	type profile struct {
+		Bio string `json:"bio" validate:"max:100"`
+	}
+	type user struct {
+		Name    string   `json:"name" validate:"required"`
+		Profile *profile `json:"profile" validate:"required"`
+	}
+	frs, err := DescribeRules(user{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	byName := map[string][]RuleInfo{}
+	for _, fr := range frs {
+		byName[fr.Name] = fr.Rules
+	}
+	if len(byName["Profile"]) != 1 || byName["Profile"][0].Name != "required" {
+		t.Errorf("struct-valued field rules must be reported, got %v", byName)
+	}
+	if len(byName["Profile.Bio"]) != 1 || byName["Profile.Bio"][0].Name != "max" {
+		t.Errorf("nested leaf rules must still be reported, got %v", byName)
+	}
+}
+
 func TestErrorsItemsAndAsErrors(t *testing.T) {
 	vd := Map(map[string]any{"age": "3"}, map[string]string{"age": "min:5", "name": "required"})
 	vd.Validate(context.Background())
