@@ -3,21 +3,34 @@ package openapi
 import (
 	"encoding/json"
 	"reflect"
+	"strconv"
 	"strings"
 	"time"
 )
 
 var (
-	timeType      = reflect.TypeOf(time.Time{})
-	marshalerType = reflect.TypeOf((*json.Marshaler)(nil)).Elem()
+	timeType       = reflect.TypeFor[time.Time]()
+	rawMessageType = reflect.TypeFor[json.RawMessage]()
+	marshalerType  = reflect.TypeFor[json.Marshaler]()
 )
+
+// derefType follows pointers with a bound so a recursive named pointer type
+// (type P *P) cannot hang generation; mirrors the main module's deref bound.
+// A type still a pointer after the bound falls to the open-schema default.
+func derefType(t reflect.Type) reflect.Type {
+	for range 32 {
+		if t.Kind() != reflect.Pointer {
+			return t
+		}
+		t = t.Elem()
+	}
+	return t
+}
 
 // schemaOf reflects t into a schema. Named struct types land in components
 // and are returned as a $ref; everything else is inlined.
 func (g *Generator) schemaOf(t reflect.Type) *Schema {
-	for t.Kind() == reflect.Pointer {
-		t = t.Elem()
-	}
+	t = derefType(t)
 
 	if s, ok := g.override[t]; ok {
 		clone := *s
@@ -25,6 +38,9 @@ func (g *Generator) schemaOf(t reflect.Type) *Schema {
 	}
 	if t == timeType {
 		return &Schema{Type: "string", Format: "date-time"}
+	}
+	if t == rawMessageType {
+		return &Schema{} // pass-through JSON: anything goes
 	}
 
 	switch t.Kind() {
@@ -37,7 +53,13 @@ func (g *Generator) schemaOf(t reflect.Type) *Schema {
 		return &Schema{Type: "integer"}
 	case reflect.Float32, reflect.Float64:
 		return &Schema{Type: "number"}
-	case reflect.Slice, reflect.Array:
+	case reflect.Slice:
+		// encoding/json serializes byte slices as base64 strings, not arrays
+		if t.Elem().Kind() == reflect.Uint8 {
+			return &Schema{Type: "string", ContentEncoding: "base64"}
+		}
+		return &Schema{Type: "array", Items: g.schemaOf(t.Elem())}
+	case reflect.Array:
 		return &Schema{Type: "array", Items: g.schemaOf(t.Elem())}
 	case reflect.Map:
 		return &Schema{Type: "object", AdditionalProperties: g.schemaOf(t.Elem())}
@@ -54,7 +76,9 @@ func (g *Generator) schemaOf(t reflect.Type) *Schema {
 }
 
 // structRef registers t under components once and returns a reference;
-// anonymous structs are inlined instead.
+// anonymous structs are inlined instead. Distinct types that flatten to the
+// same component name (a.User vs b.User) get numeric suffixes instead of
+// silently overwriting each other.
 func (g *Generator) structRef(t reflect.Type) *Schema {
 	if t.Name() == "" {
 		return g.structSchema(t)
@@ -62,8 +86,16 @@ func (g *Generator) structRef(t reflect.Type) *Schema {
 
 	name, ok := g.named[t]
 	if !ok {
-		name = componentName(t)
+		base := componentName(t)
+		name = base
+		for i := 2; ; i++ {
+			if _, taken := g.owner[name]; !taken {
+				break
+			}
+			name = base + strconv.Itoa(i)
+		}
 		g.named[t] = name
+		g.owner[name] = t
 		g.doc.Components.Schemas[name] = &Schema{} // placeholder breaks cycles
 		g.doc.Components.Schemas[name] = g.structSchema(t)
 	}
@@ -77,29 +109,68 @@ func (g *Generator) structSchema(t reflect.Type) *Schema {
 	s := &Schema{Type: "object", Properties: map[string]*Schema{}}
 	rules := g.rulesFor(t)
 
-	for i := range t.NumField() {
-		field := t.Field(i)
-		if !field.IsExported() {
+	for _, bf := range jsonFields(t, nil, map[reflect.Type]bool{}) {
+		if bf.name == "" {
 			continue
 		}
-		name := jsonName(field)
-		if name == "" {
-			continue
+		if _, taken := s.Properties[bf.name]; taken {
+			continue // shallower field wins, like encoding/json
 		}
-
-		prop := g.schemaOf(field.Type)
-		if fr, ok := rules[indexKey(field.Index)]; ok {
-			if applyRules(prop, fr.Rules, field.Type) {
-				s.Required = append(s.Required, name)
+		prop := g.schemaOf(bf.Type)
+		if fr, ok := rules[indexKey(bf.index)]; ok {
+			if applyRules(prop, fr.Rules) {
+				s.Required = append(s.Required, bf.name)
 			}
-			if len(fr.Element) > 0 && prop.Items != nil {
-				applyRules(prop.Items, fr.Element, field.Type.Elem())
-			}
+			applyElementRules(prop, fr.Element)
 		}
-		s.Properties[name] = prop
+		s.Properties[bf.name] = prop
 	}
 
 	return s
+}
+
+// bodyField is one json-visible field, with its full index path from the root
+// type so validate rules resolve across embedded promotions.
+type bodyField struct {
+	reflect.StructField
+	name  string
+	index []int
+}
+
+// jsonFields flattens t the way encoding/json serializes it: anonymous
+// embedded structs promote their fields into the parent object (the wire
+// format is flat), while an embedded field carrying an explicit json name
+// stays a nested property. Unexported embedded types still promote their
+// exported fields, exactly like encoding/json. Name clashes resolve
+// shallowest-first via the caller's Properties check.
+func jsonFields(t reflect.Type, prefix []int, seen map[reflect.Type]bool) []bodyField {
+	if seen[t] {
+		return nil
+	}
+	seen[t] = true
+	defer delete(seen, t)
+
+	var out []bodyField
+	for i := range t.NumField() {
+		f := t.Field(i)
+		idx := append(append([]int{}, prefix...), i)
+
+		if f.Anonymous {
+			ft := derefType(f.Type)
+			tagName, _, _ := strings.Cut(f.Tag.Get("json"), ",")
+			if ft.Kind() == reflect.Struct && tagName == "" && f.Tag.Get("json") != "-" {
+				out = append(out, jsonFields(ft, idx, seen)...)
+				continue
+			}
+		}
+		if !f.IsExported() {
+			continue
+		}
+		// name is "" for body-hidden fields (json:"-", uri-only); they stay in
+		// the list so request() can still route them as parameters.
+		out = append(out, bodyField{StructField: f, name: jsonName(f), index: idx})
+	}
+	return out
 }
 
 // jsonName returns the wire name of a field, or "" when it is hidden.
@@ -117,12 +188,11 @@ func jsonName(field reflect.StructField) string {
 	return field.Name
 }
 
-// componentName derives a readable, unique component name from a type,
-// flattening generic instantiations of any depth:
-// Envelope[Page[biz.User]] -> EnvelopePageUser.
+// componentName derives a readable component name from a type, flattening
+// generic instantiations of any depth: Envelope[Page[biz.User]] -> EnvelopePageUser.
 func componentName(t reflect.Type) string {
 	segments := strings.FieldsFunc(t.Name(), func(r rune) bool {
-		return r == '[' || r == ']' || r == '{' || r == '}' || r == ',' || r == '*' || r == ' '
+		return r == '[' || r == ']' || r == ',' || r == '*' || r == ' '
 	})
 	var b strings.Builder
 	for _, segment := range segments {

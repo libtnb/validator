@@ -23,12 +23,18 @@ import (
 )
 
 // Generator accumulates operations into an OpenAPI 3.1 document.
+// It is not safe for concurrent use; build the document from one goroutine.
 type Generator struct {
 	doc      *Document
 	v        *validator.Validator
 	named    map[reflect.Type]string
+	owner    map[string]reflect.Type // component name -> type, detects flattening collisions
 	override map[reflect.Type]*Schema
 	rules    map[reflect.Type]map[string]validator.FieldRules
+	// err carries introspection failures out of the schema-building recursion;
+	// Add surfaces and clears it, so a malformed validate tag fails loudly
+	// instead of publishing a constraint-free schema.
+	err error
 }
 
 type Option func(*Generator)
@@ -55,6 +61,7 @@ func New(title, version string, opts ...Option) *Generator {
 		},
 		v:        validator.Default(),
 		named:    map[reflect.Type]string{},
+		owner:    map[string]reflect.Type{},
 		override: map[reflect.Type]*Schema{},
 		rules:    map[reflect.Type]map[string]validator.FieldRules{},
 	}
@@ -100,6 +107,13 @@ func (g *Generator) Add(method, path string, op Op) error {
 	}
 	operation.Responses[fmt.Sprintf("%d", status)] = resp
 
+	// a malformed validate tag anywhere in the operation's types fails the Add:
+	// a schema stripped of its constraints would be a false contract
+	if err := g.err; err != nil {
+		g.err = nil
+		return fmt.Errorf("%s %s: %w", method, path, err)
+	}
+
 	item, ok := g.doc.Paths[path]
 	if !ok {
 		item = PathItem{}
@@ -114,10 +128,7 @@ func (g *Generator) Add(method, path string, op Op) error {
 // path parameters, query tags are query parameters, json tags form the body
 // on methods that carry one.
 func (g *Generator) request(method string, sample any, op *Operation) error {
-	t := reflect.TypeOf(sample)
-	for t.Kind() == reflect.Pointer {
-		t = t.Elem()
-	}
+	t := derefType(reflect.TypeOf(sample))
 	if t.Kind() != reflect.Struct {
 		return fmt.Errorf("request sample must be a struct, got %s", t)
 	}
@@ -126,44 +137,42 @@ func (g *Generator) request(method string, sample any, op *Operation) error {
 	hasBody := method == http.MethodPost || method == http.MethodPut || method == http.MethodPatch
 
 	body := &Schema{Type: "object", Properties: map[string]*Schema{}}
-	for i := range t.NumField() {
-		field := t.Field(i)
-		if !field.IsExported() {
-			continue
-		}
-		fr := rules[indexKey(field.Index)]
+	for _, bf := range jsonFields(t, nil, map[reflect.Type]bool{}) {
+		fr := rules[indexKey(bf.index)]
 
-		if name, _, _ := strings.Cut(field.Tag.Get("uri"), ","); name != "" && name != "-" {
-			schema := g.schemaOf(field.Type)
-			applyRules(schema, fr.Rules, field.Type)
+		if name, _, _ := strings.Cut(bf.Tag.Get("uri"), ","); name != "" && name != "-" {
+			schema := g.schemaOf(bf.Type)
+			applyRules(schema, fr.Rules)
 			op.Parameters = append(op.Parameters, &Parameter{
 				Name: name, In: "path", Required: true, Schema: schema,
 			})
 			continue
 		}
 
-		if name, _, _ := strings.Cut(field.Tag.Get("query"), ","); name != "" && name != "-" && !hasBody {
-			schema := g.schemaOf(field.Type)
-			required := applyRules(schema, fr.Rules, field.Type)
+		// a query tag always means a query parameter — the binder reads the query
+		// string on every method, so documenting it as a body property on
+		// POST/PUT/PATCH would point generated clients at the wrong place
+		if name, _, _ := strings.Cut(bf.Tag.Get("query"), ","); name != "" && name != "-" {
+			schema := g.schemaOf(bf.Type)
+			required := applyRules(schema, fr.Rules)
 			op.Parameters = append(op.Parameters, &Parameter{
 				Name: name, In: "query", Required: required, Schema: schema,
 			})
 			continue
 		}
 
-		if !hasBody {
+		if !hasBody || bf.name == "" {
 			continue
 		}
-		if name := jsonName(field); name != "" {
-			prop := g.schemaOf(field.Type)
-			if applyRules(prop, fr.Rules, field.Type) {
-				body.Required = append(body.Required, name)
-			}
-			if len(fr.Element) > 0 && prop.Items != nil {
-				applyRules(prop.Items, fr.Element, field.Type.Elem())
-			}
-			body.Properties[name] = prop
+		if _, taken := body.Properties[bf.name]; taken {
+			continue // shallower field wins, like encoding/json
 		}
+		prop := g.schemaOf(bf.Type)
+		if applyRules(prop, fr.Rules) {
+			body.Required = append(body.Required, bf.name)
+		}
+		applyElementRules(prop, fr.Element)
+		body.Properties[bf.name] = prop
 	}
 
 	if hasBody && len(body.Properties) > 0 {
@@ -176,19 +185,29 @@ func (g *Generator) request(method string, sample any, op *Operation) error {
 	return nil
 }
 
-// rulesFor introspects and caches the validate rules of a struct type,
-// keyed by field index path.
+// rulesFor introspects and caches the validate rules of a struct type, keyed
+// by field index path. An introspection failure (malformed validate tag) is
+// recorded on g.err — never swallowed, since the schema would silently lose
+// its constraints — and reported once per type.
 func (g *Generator) rulesFor(t reflect.Type) map[string]validator.FieldRules {
 	if cached, ok := g.rules[t]; ok {
 		return cached
 	}
 
 	out := map[string]validator.FieldRules{}
-	fields, err := g.v.DescribeRules(reflect.New(t).Elem().Interface())
+	sample := reflect.New(t).Elem().Interface()
+	// CheckRules catches what DescribeRules deliberately passes through —
+	// unknown rule names, bad static args, DSL syntax errors — i.e. every tag
+	// that would 400 at runtime while the schema claimed no such constraint.
+	fields, err := g.v.DescribeRules(sample)
 	if err == nil {
-		for _, fr := range fields {
-			out[indexKey(fr.Index)] = fr
-		}
+		err = g.v.CheckRules(sample)
+	}
+	if err != nil {
+		g.err = fmt.Errorf("%s: invalid validate tags: %w", t, err)
+	}
+	for _, fr := range fields {
+		out[indexKey(fr.Index)] = fr
 	}
 	g.rules[t] = out
 

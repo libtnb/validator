@@ -72,4 +72,7 @@ type Schema struct {
 	MaxLength            *uint64            `json:"maxLength,omitempty"`
 	MinItems             *uint64            `json:"minItems,omitempty"`
 	MaxItems             *uint64            `json:"maxItems,omitempty"`
+	UniqueItems          bool               `json:"uniqueItems,omitempty"`
+	// ContentEncoding marks base64 payloads ([]byte fields), per JSON Schema 2020-12.
+	ContentEncoding string `json:"contentEncoding,omitempty"`
 }
