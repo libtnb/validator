@@ -22,23 +22,9 @@ type cowCache[V any] struct {
 	m  atomic.Pointer[map[string]V]
 }
 
-func newCowCache[V any]() *cowCache[V] {
-	c := &cowCache[V]{}
-	empty := map[string]V{}
-	c.m.Store(&empty)
-	return c
-}
-
 func (c *cowCache[V]) load(key string) (V, bool) {
 	v, ok := (*c.m.Load())[key]
 	return v, ok
-}
-
-func (c *cowCache[V]) clear() {
-	c.mu.Lock()
-	empty := map[string]V{}
-	c.m.Store(&empty)
-	c.mu.Unlock()
 }
 
 // getOrBuild builds once on a miss; errors aren't cached.
@@ -75,12 +61,10 @@ type diveSplit struct {
 	err                error
 }
 
-// mapPlan precompiles a rules-map validation (Map/JSON/URLValues/Var). rules is
-// a read-only snapshot shared with validations; gen stamps the registry generation.
+// mapPlan precompiles a rules-map validation. rules is a shared read-only snapshot.
 type mapPlan struct {
 	rules map[string]string
 	plan  []compiledField
-	gen   uint64
 }
 
 func (mp *mapPlan) matches(rules map[string]string) bool {
@@ -95,15 +79,15 @@ func (mp *mapPlan) matches(rules map[string]string) bool {
 	return true
 }
 
-// rulesPlan resolves the precompiled plan for a caller rules map. L1 is keyed by
-// map pointer but content-verified on every hit (a reused address or stale
-// registry generation never serves the wrong plan); L2 dedups by canonical content.
+// rulesPlan resolves the precompiled plan for a caller rules map. L1 is keyed
+// by map pointer but content-verified on every hit; L2 deduplicates by canonical
+// content.
 func (v *Validator) rulesPlan(rules map[string]string) *mapPlan {
 	key := reflect.ValueOf(rules).Pointer()
 	c, hadPtr := v.rulesPlans.Load(key)
 	if hadPtr {
 		mp := c.(*mapPlan)
-		if mp.gen == v.gen.Load() && mp.matches(rules) {
+		if mp.matches(rules) {
 			return mp
 		}
 	}
@@ -122,7 +106,6 @@ func (v *Validator) rulesPlan(rules map[string]string) *mapPlan {
 	return mp
 }
 
-// varPlan is rulesPlan for Var's single expression, keyed by the bare string.
 func (v *Validator) varPlan(rule string) *mapPlan {
 	mp, _ := v.varPlans.getOrBuild(rule, func() (*mapPlan, error) {
 		return v.buildMapPlan(map[string]string{varFieldName: rule}), nil
@@ -131,7 +114,7 @@ func (v *Validator) varPlan(rule string) *mapPlan {
 }
 
 func (v *Validator) buildMapPlan(rules map[string]string) *mapPlan {
-	mp := &mapPlan{rules: copyStrMap(rules), gen: v.gen.Load()}
+	mp := &mapPlan{rules: copyStrMap(rules)}
 	mp.plan = make([]compiledField, 0, len(rules))
 	for name, expr := range rules {
 		if strings.TrimSpace(expr) == "" { // no-op
@@ -165,10 +148,9 @@ func (v *Validator) splitDive(expr string) diveSplit {
 	return ds
 }
 
-// resolver bridges the registry to the compiler; an ErrorRule shadows a same-signature Rule.
 func (v *Validator) resolver() resolver {
-	return func(sig string) (Rule, ErrorRule, bool) {
-		if er, ok := v.registry.errorRule(sig); ok {
+	return func(sig string) (Rule, FallibleRule, bool) {
+		if er, ok := v.registry.fallibleRule(sig); ok {
 			return nil, er, true
 		}
 		if r, ok := v.registry.rule(sig); ok {
@@ -178,10 +160,9 @@ func (v *Validator) resolver() resolver {
 	}
 }
 
-// isRawArg reports whether name's argument is read raw; ErrorRule shadows Rule.
 func (v *Validator) isRawArg(name string) bool {
 	type rawArger interface{ IsRawArg() bool }
-	if er, ok := v.registry.errorRule(name); ok {
+	if er, ok := v.registry.fallibleRule(name); ok {
 		if ra, ok := er.(rawArger); ok {
 			return ra.IsRawArg()
 		}
@@ -215,4 +196,11 @@ func contentKeyOf(rules map[string]string) string {
 		b.WriteString(v)
 	}
 	return b.String()
+}
+
+func newCowCache[V any]() *cowCache[V] {
+	c := &cowCache[V]{}
+	empty := map[string]V{}
+	c.m.Store(&empty)
+	return c
 }

@@ -9,21 +9,19 @@ import (
 // errSometimesInDive rejects "sometimes" in a dive element segment, where it is a silent no-op.
 const errSometimesInDive = `validator: "sometimes" applies to the field itself, not dive elements`
 
-// resolver looks up a rule by signature; errRule wins when non-nil, ok=false fails compile.
-type resolver func(signature string) (rule Rule, errRule ErrorRule, ok bool)
+type resolver func(signature string) (rule Rule, fallible FallibleRule, ok bool)
 
-// compiled program: Diag appends leaf failures into dst exhaustively; Fast short-circuits.
 type compiled struct {
-	Fast func(f Field) bool
-	Diag func(f Field, dst []FieldError) (bool, []FieldError)
+	Fast func(f *Field) (bool, error)
+	Diag func(f *Field, dst []FieldError) (bool, []FieldError, error)
 	// sometimes: a "sometimes" marker on the AND spine; the engine skips the
 	// whole field when its value is absent.
 	sometimes bool
 }
 
 type compiledNode struct {
-	fast func(Field) bool
-	diag func(Field, []FieldError) (bool, []FieldError)
+	fast func(*Field) (bool, error)
+	diag func(*Field, []FieldError) (bool, []FieldError, error)
 }
 
 // argChecker lets a rule validate its static args at compile time (e.g. a bad regex pattern).
@@ -32,21 +30,10 @@ type argChecker interface {
 }
 
 // leafCompiler is an optional hook letting a built-in rule return a pass function
-// that skips per-eval bindArgs and interface dispatch. ErrorRule precedence is unaffected.
+// that skips per-eval bindArgs and interface dispatch.
 type leafCompiler interface {
-	compilePasses(args []string) func(Field) bool
+	compilePasses(args []string) func(*Field) bool
 }
-
-type argsBinder interface {
-	WithArgs(args []string) Field
-}
-
-type argsField struct {
-	Field
-	args []string
-}
-
-func (a argsField) Attrs() []string { return a.args }
 
 // compile turns an AST into a compiled program; unknown rules yield a *dsl.ParseError.
 func compile(node dsl.Node, resolve resolver) (*compiled, error) {
@@ -73,16 +60,23 @@ func compileNode(node dsl.Node, resolve resolver, numericHint bool) (compiledNod
 			return compiledNode{}, err
 		}
 		return compiledNode{
-			fast: func(f Field) bool { return !child.fast(f) },
-			diag: func(f Field, dst []FieldError) (bool, []FieldError) {
-				if !child.fast(f) {
-					return true, dst
+			fast: func(f *Field) (bool, error) {
+				passed, err := child.fast(f)
+				return !passed, err
+			},
+			diag: func(f *Field, dst []FieldError) (bool, []FieldError, error) {
+				passed, err := child.fast(f)
+				if err != nil {
+					return false, dst, err
+				}
+				if !passed {
+					return true, dst, nil
 				}
 				return false, appendGrown(dst, FieldError{
 					Field:   f.Name(),
 					Rule:    "!",
 					Message: "The {field} is invalid.",
-				})
+				}), nil
 			},
 		}, nil
 
@@ -98,23 +92,27 @@ func compileNode(node dsl.Node, resolve resolver, numericHint bool) (compiledNod
 			children[i] = c
 		}
 		return compiledNode{
-			fast: func(f Field) bool {
+			fast: func(f *Field) (bool, error) {
 				for i := range children {
-					if !children[i].fast(f) {
-						return false
+					passed, err := children[i].fast(f)
+					if err != nil || !passed {
+						return false, err
 					}
 				}
-				return true
+				return true, nil
 			},
-			diag: func(f Field, dst []FieldError) (bool, []FieldError) {
-				// Every operand runs, so ErrorRules must be idempotent.
+			diag: func(f *Field, dst []FieldError) (bool, []FieldError, error) {
 				ok := true
 				for i := range children {
 					var okI bool
-					okI, dst = children[i].diag(f, dst)
+					var err error
+					okI, dst, err = children[i].diag(f, dst)
+					if err != nil {
+						return false, dst, err
+					}
 					ok = ok && okI
 				}
-				return ok, dst
+				return ok, dst, nil
 			},
 		}, nil
 
@@ -130,15 +128,19 @@ func compileNode(node dsl.Node, resolve resolver, numericHint bool) (compiledNod
 			children[i] = c
 		}
 		return compiledNode{
-			fast: func(f Field) bool {
+			fast: func(f *Field) (bool, error) {
 				for i := range children {
-					if children[i].fast(f) {
-						return true
+					passed, err := children[i].fast(f)
+					if err != nil {
+						return false, err
+					}
+					if passed {
+						return true, nil
 					}
 				}
-				return false
+				return false, nil
 			},
-			diag: func(f Field, dst []FieldError) (bool, []FieldError) {
+			diag: func(f *Field, dst []FieldError) (bool, []FieldError, error) {
 				// Reserve parent message; roll back to discard it if any branch passes.
 				start := len(dst)
 				dst = appendGrown(dst, FieldError{
@@ -147,13 +149,16 @@ func compileNode(node dsl.Node, resolve resolver, numericHint bool) (compiledNod
 					Message: "The {field} does not satisfy any of the required conditions.",
 				})
 				for i := range children {
-					ok, d := children[i].diag(f, dst)
+					ok, d, err := children[i].diag(f, dst)
+					if err != nil {
+						return false, d, err
+					}
 					if ok {
-						return true, dst[:start]
+						return true, dst[:start], nil
 					}
 					dst = d
 				}
-				return false, dst
+				return false, dst, nil
 			},
 		}, nil
 
@@ -163,16 +168,16 @@ func compileNode(node dsl.Node, resolve resolver, numericHint bool) (compiledNod
 }
 
 func compileLeaf(leaf dsl.Leaf, resolve resolver, numericHint bool) (compiledNode, error) {
-	rule, errRule, ok := resolve(leaf.Name)
-	if !ok || (rule == nil && errRule == nil) {
+	rule, fallible, ok := resolve(leaf.Name)
+	if !ok || (rule == nil && fallible == nil) {
 		return compiledNode{}, &dsl.ParseError{Pos: leaf.Pos, Msg: "unknown rule " + strconv.Quote(leaf.Name)}
 	}
 	name := leaf.Name
 	args := leaf.Args
 
 	var checked any = rule
-	if errRule != nil {
-		checked = errRule
+	if fallible != nil {
+		checked = fallible
 	}
 	if c, ok := checked.(argChecker); ok {
 		if err := c.CheckArgs(args); err != nil {
@@ -188,22 +193,27 @@ func compileLeaf(leaf dsl.Leaf, resolve resolver, numericHint bool) (compiledNod
 		}
 	}
 
-	if errRule != nil {
+	if fallible != nil {
+		validate := func(f *Field) (bool, error) {
+			valid, err := fallible.Validate(bindArgs(f, args))
+			if err != nil {
+				return false, &RuleError{Field: f.Name(), Rule: name, Err: err}
+			}
+			return valid, nil
+		}
 		return compiledNode{
-			fast: func(f Field) bool {
-				return errRule.PassesE(bindArgs(f, args)) == nil
-			},
-			diag: func(f Field, dst []FieldError) (bool, []FieldError) {
-				ff := bindArgs(f, args)
-				if err := errRule.PassesE(ff); err != nil {
-					// err.Error() is the message template; fall back to rule's if empty.
-					msg := err.Error()
-					if msg == "" {
-						msg = errRule.Message()
-					}
-					return false, appendGrown(dst, FieldError{Field: f.Name(), Rule: name, Message: msg, Params: args})
+			fast: validate,
+			diag: func(f *Field, dst []FieldError) (bool, []FieldError, error) {
+				valid, err := validate(f)
+				if err != nil {
+					return false, dst, err
 				}
-				return true, dst
+				if valid {
+					return true, dst, nil
+				}
+				return false, appendGrown(dst, FieldError{
+					Field: f.Name(), Rule: name, Message: fallible.Message(), Params: args,
+				}), nil
 			},
 		}, nil
 	}
@@ -211,37 +221,37 @@ func compileLeaf(leaf dsl.Leaf, resolve resolver, numericHint bool) (compiledNod
 	if lc, ok := rule.(leafCompiler); ok {
 		if passes := lc.compilePasses(args); passes != nil {
 			return compiledNode{
-				fast: passes,
-				diag: func(f Field, dst []FieldError) (bool, []FieldError) {
+				fast: func(f *Field) (bool, error) { return passes(f), nil },
+				diag: func(f *Field, dst []FieldError) (bool, []FieldError, error) {
 					if passes(f) {
-						return true, dst
+						return true, dst, nil
 					}
 					return false, appendGrown(dst, FieldError{
 						Field:   f.Name(),
 						Rule:    name,
 						Message: rule.Message(),
 						Params:  args,
-					})
+					}), nil
 				},
 			}, nil
 		}
 	}
 
 	return compiledNode{
-		fast: func(f Field) bool {
-			return rule.Passes(bindArgs(f, args))
+		fast: func(f *Field) (bool, error) {
+			return rule.Passes(bindArgs(f, args)), nil
 		},
-		diag: func(f Field, dst []FieldError) (bool, []FieldError) {
+		diag: func(f *Field, dst []FieldError) (bool, []FieldError, error) {
 			ff := bindArgs(f, args)
 			if rule.Passes(ff) {
-				return true, dst
+				return true, dst, nil
 			}
 			return false, appendGrown(dst, FieldError{
 				Field:   f.Name(),
 				Rule:    name,
 				Message: rule.Message(),
 				Params:  args,
-			})
+			}), nil
 		},
 	}, nil
 }
@@ -330,9 +340,7 @@ func flattenAnd(n dsl.And) []dsl.Node {
 	return out
 }
 
-func bindArgs(f Field, args []string) Field {
-	if b, ok := f.(argsBinder); ok {
-		return b.WithArgs(args)
-	}
-	return argsField{Field: f, args: args}
+func bindArgs(f *Field, args []string) *Field {
+	f.attrs = args
+	return f
 }

@@ -3,50 +3,54 @@ package validator
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 )
 
-func TestBindAndSafeBind(t *testing.T) {
+func TestBindAndValidateAs(t *testing.T) {
 	type User struct {
 		Email string `validate:"required && email"`
 		Age   int    `validate:"required && numeric"`
 	}
 
-	t.Run("SafeBind after passing validation", func(t *testing.T) {
-		vd := Map(
+	t.Run("ValidateAs after passing validation", func(t *testing.T) {
+		vd := MustMap(
 			map[string]any{"Email": "a@b.com", "Age": "42"},
 			map[string]string{"Email": "required && email", "Age": "required && numeric"},
 		)
 		vd.Validate(context.Background())
 		var u User
-		if err := vd.SafeBind(&u); err != nil {
-			t.Fatalf("SafeBind: %v", err)
+		if err := vd.ValidateAs(context.Background(), &u); err != nil {
+			t.Fatalf("ValidateAs: %v", err)
 		}
 		if u.Email != "a@b.com" || u.Age != 42 {
 			t.Errorf("bound = %+v", u)
 		}
 	})
 
-	t.Run("SafeBind before Validate errors", func(t *testing.T) {
-		vd := Map(map[string]any{"Email": "a@b.com"}, map[string]string{"Email": "required"})
+	t.Run("ValidateAs validates before binding", func(t *testing.T) {
+		vd := MustMap(map[string]any{"Email": "a@b.com"}, map[string]string{"Email": "required"})
 		var u User
-		if err := vd.SafeBind(&u); err == nil {
-			t.Error("SafeBind before Validate should error")
+		if err := vd.ValidateAs(context.Background(), &u); err != nil {
+			t.Fatalf("ValidateAs: %v", err)
+		}
+		if u.Email != "a@b.com" {
+			t.Fatalf("bound = %+v", u)
 		}
 	})
 
-	t.Run("SafeBind on failed validation errors", func(t *testing.T) {
-		vd := Map(map[string]any{"Email": "nope"}, map[string]string{"Email": "required && email"})
+	t.Run("ValidateAs on failed validation errors", func(t *testing.T) {
+		vd := MustMap(map[string]any{"Email": "nope"}, map[string]string{"Email": "required && email"})
 		vd.Validate(context.Background())
 		var u User
-		if err := vd.SafeBind(&u); err == nil {
-			t.Error("SafeBind on failure should error")
+		if err := vd.ValidateAs(context.Background(), &u); err == nil {
+			t.Error("ValidateAs on failure should error")
 		}
 	})
 
 	t.Run("Bind ignores validation state", func(t *testing.T) {
-		vd := Map(map[string]any{"Email": "raw", "Age": 7}, map[string]string{"Email": "required"})
+		vd := MustMap(map[string]any{"Email": "raw", "Age": 7}, map[string]string{"Email": "required"})
 		var u User
 		if err := vd.Bind(&u); err != nil {
 			t.Fatalf("Bind: %v", err)
@@ -56,11 +60,11 @@ func TestBindAndSafeBind(t *testing.T) {
 		}
 	})
 
-	t.Run("non-pointer target errors", func(t *testing.T) {
-		vd := Map(map[string]any{}, map[string]string{})
-		var u User
+	t.Run("nil pointer target errors", func(t *testing.T) {
+		vd := MustMap(map[string]any{}, map[string]string{})
+		var u *User
 		if err := vd.Bind(u); err == nil {
-			t.Error("Bind to non-pointer should error")
+			t.Error("Bind to nil pointer should error")
 		}
 	})
 
@@ -72,7 +76,7 @@ func TestBindAndSafeBind(t *testing.T) {
 			Name  string `validate:"required"`
 			Inner *Inner // nil target; bindInto must allocate, not panic
 		}
-		vd := Map(
+		vd := MustMap(
 			map[string]any{"Name": "x", "Inner.City": "NYC"},
 			map[string]string{"Name": "required"},
 		)
@@ -90,13 +94,13 @@ func TestBindAndSafeBind(t *testing.T) {
 }
 
 func TestVarAndPackageFuncs(t *testing.T) {
-	ok := Var("a@b.com", "required && email")
+	ok := MustValue("a@b.com", "required && email")
 	ok.Validate(context.Background())
 	if ok.Fails() {
 		t.Errorf("valid var should pass: %v", ok.Errors().All())
 	}
 
-	bad := Var("nope", "required && email")
+	bad := MustValue("nope", "required && email")
 	bad.Validate(context.Background())
 	if !bad.Fails() {
 		t.Error("invalid var should fail")
@@ -105,7 +109,7 @@ func TestVarAndPackageFuncs(t *testing.T) {
 	type T struct {
 		Name string `validate:"required"`
 	}
-	sv := NewValidator(WithStrictRequired()).Struct(T{Name: ""})
+	sv := MustNew(WithStrictRequired()).MustStruct(T{Name: ""})
 	sv.Validate(context.Background())
 	if !sv.Fails() {
 		t.Error("empty required name should fail under strict required")
@@ -117,7 +121,7 @@ func TestBindPointerScalar(t *testing.T) {
 		Age  *int
 		Name *string
 	}
-	vd := Map(map[string]any{"Age": "42", "Name": "bob"}, map[string]string{})
+	vd := MustMap(map[string]any{"Age": "42", "Name": "bob"}, map[string]string{})
 	var out T
 	if err := vd.Bind(&out); err != nil {
 		t.Fatal(err)
@@ -139,7 +143,7 @@ func TestBindUntaggedFromStructSource(t *testing.T) {
 		Email string
 		Name  string
 	}
-	vd := Struct(Src{Email: "a@b.com", Name: "bob"})
+	vd := MustStruct(Src{Email: "a@b.com", Name: "bob"})
 	vd.Validate(context.Background())
 	var d Dst
 	if err := vd.Bind(&d); err != nil {
@@ -155,13 +159,13 @@ func TestBindUntaggedFields(t *testing.T) {
 		Email string `validate:"required && email"`
 		Name  string // untagged — must still bind
 	}
-	vd := Map(
+	vd := MustMap(
 		map[string]any{"Email": "a@b.com", "Name": "bob"},
 		map[string]string{"Email": "required && email"},
 	)
 	vd.Validate(context.Background())
 	var u User
-	if err := vd.SafeBind(&u); err != nil {
+	if err := vd.ValidateAs(context.Background(), &u); err != nil {
 		t.Fatal(err)
 	}
 	if u.Name != "bob" {
@@ -169,17 +173,18 @@ func TestBindUntaggedFields(t *testing.T) {
 	}
 }
 
-func TestBindIntegerOverflowSkipped(t *testing.T) {
+func TestBindIntegerOverflowIsAtomicError(t *testing.T) {
 	type T struct {
 		N int8
 	}
-	vd := Map(map[string]any{"N": "300"}, map[string]string{})
-	var out T
-	if err := vd.Bind(&out); err != nil {
-		t.Fatal(err)
+	vd := MustMap(map[string]any{"N": "300"}, map[string]string{})
+	out := T{N: 7}
+	err := vd.Bind(&out)
+	if !errors.Is(err, ErrBindConversion) {
+		t.Fatalf("error = %v", err)
 	}
-	if out.N != 0 {
-		t.Errorf("overflowing 300 into int8 should be skipped (0), got %d (wrapped)", out.N)
+	if out.N != 7 {
+		t.Errorf("failed bind mutated destination: %d", out.N)
 	}
 }
 
@@ -189,12 +194,12 @@ func TestVarBindDoesNotFanValue(t *testing.T) {
 		Age   int
 		Name  string
 	}
-	vd := Var("7", "numeric")
+	vd := MustValue("7", "numeric")
 	vd.Validate(context.Background())
 	var u User
-	_ = vd.SafeBind(&u)
+	_ = vd.ValidateAs(context.Background(), &u)
 	if u.Email != "" || u.Age != 0 || u.Name != "" {
-		t.Errorf("Var SafeBind must not fan the scalar into struct fields, got %+v", u)
+		t.Errorf("Value ValidateAs must not fan the scalar into struct fields, got %+v", u)
 	}
 }
 
@@ -207,7 +212,7 @@ func TestBindRecursivePointerNoCrash(t *testing.T) {
 			B string
 		}
 		var out S
-		_ = Map(map[string]any{"A": "x", "B": "y"}, nil).Bind(&out)
+		_ = MustMap(map[string]any{"A": "x", "B": "y"}, nil).Bind(&out)
 	})
 }
 
@@ -216,21 +221,21 @@ func TestToTimeBindNoCrash(t *testing.T) {
 	type T struct{ When time.Time }
 	completesWithin(t, "Bind float64 into time.Time", func() {
 		var out T
-		_ = Map(map[string]any{"When": 1700000000.0}, nil).Bind(&out)
+		_ = MustMap(map[string]any{"When": 1700000000.0}, nil).Bind(&out)
 	})
 	completesWithin(t, "Bind bool into time.Time", func() {
 		var out T
-		_ = Map(map[string]any{"When": true}, nil).Bind(&out)
+		_ = MustMap(map[string]any{"When": true}, nil).Bind(&out)
 	})
 	completesWithin(t, "JSON timestamp number bind", func() {
 		var out T
-		vd := JSON(`{"When": 1700000000}`, map[string]string{})
+		vd := MustJSON(`{"When": 1700000000}`, map[string]string{})
 		vd.Validate(context.Background())
 		_ = vd.Bind(&out)
 	})
 	// a real date string still binds
 	var out T
-	if err := Map(map[string]any{"When": "2024-01-02T15:04:05Z"}, nil).Bind(&out); err != nil {
+	if err := MustMap(map[string]any{"When": "2024-01-02T15:04:05Z"}, nil).Bind(&out); err != nil {
 		t.Fatalf("bind date string: %v", err)
 	}
 	if out.When.IsZero() {
@@ -238,31 +243,31 @@ func TestToTimeBindNoCrash(t *testing.T) {
 	}
 }
 
-// Map bind: total failure keeps preset (writes nothing); empty sets empty; partial keeps good ones.
-func TestMapBindNoClobberOnTotalFailure(t *testing.T) {
+// Map binding is atomic: any invalid member rejects the entire bind.
+func TestMapBindIsAtomic(t *testing.T) {
 	type T struct{ M map[string]int }
 
 	// total failure -> preset kept
 	preset := T{M: map[string]int{"keep": 9}}
-	if err := Map(map[string]any{"M": map[string]any{"a": "notanint"}}, nil).Bind(&preset); err != nil {
-		t.Fatal(err)
+	if err := MustMap(map[string]any{"M": map[string]any{"a": "notanint"}}, nil).Bind(&preset); !errors.Is(err, ErrBindConversion) {
+		t.Fatalf("error = %v", err)
 	}
 	if preset.M == nil || preset.M["keep"] != 9 {
 		t.Errorf("a total-failure map conversion must not clobber the preset field, got %v", preset.M)
 	}
 
-	// partial success -> good entries kept
-	var partial T
-	if err := Map(map[string]any{"M": map[string]any{"a": 1, "b": "bad"}}, nil).Bind(&partial); err != nil {
-		t.Fatal(err)
+	// partial conversion is rejected rather than silently dropping bad entries.
+	partial := T{M: map[string]int{"keep": 7}}
+	if err := MustMap(map[string]any{"M": map[string]any{"a": 1, "b": "bad"}}, nil).Bind(&partial); !errors.Is(err, ErrBindConversion) {
+		t.Fatalf("error = %v", err)
 	}
-	if partial.M["a"] != 1 || len(partial.M) != 1 {
-		t.Errorf("partial map conversion should keep the good entries, got %v", partial.M)
+	if len(partial.M) != 1 || partial.M["keep"] != 7 {
+		t.Errorf("failed partial conversion mutated destination: %v", partial.M)
 	}
 
 	// empty source -> empty result
 	empty := T{M: map[string]int{"keep": 9}}
-	if err := Map(map[string]any{"M": map[string]any{}}, nil).Bind(&empty); err != nil {
+	if err := MustMap(map[string]any{"M": map[string]any{}}, nil).Bind(&empty); err != nil {
 		t.Fatal(err)
 	}
 	if len(empty.M) != 0 {
@@ -284,7 +289,7 @@ func TestBindTypedNilCompositeNoClobber(t *testing.T) {
 	}
 	n := 5
 	preset := Dst{S: []string{"keep"}, M: map[string]int{"k": 1}, P: &n}
-	if err := Struct(Src{}).Bind(&preset); err != nil {
+	if err := MustStruct(Src{}).Bind(&preset); err != nil {
 		t.Fatal(err)
 	}
 	if len(preset.S) != 1 || preset.S[0] != "keep" {
@@ -302,7 +307,7 @@ func TestBindTypedNilCompositeNoClobber(t *testing.T) {
 func TestBindLargeUint64(t *testing.T) {
 	type T struct{ U uint64 }
 	var out T
-	if err := Map(map[string]any{"U": "9223372036854775808"}, nil).Bind(&out); err != nil {
+	if err := MustMap(map[string]any{"U": "9223372036854775808"}, nil).Bind(&out); err != nil {
 		t.Fatal(err)
 	}
 	if out.U != 9223372036854775808 {
@@ -318,7 +323,7 @@ func TestBindCompositeAndTime(t *testing.T) {
 		When  time.Time
 		WhenP *time.Time
 	}
-	vd := Map(map[string]any{
+	vd := MustMap(map[string]any{
 		"Tags":  []any{"a", "b", "c"},
 		"Codes": map[string]any{"k": "v"},
 		"When":  "2024-01-02T03:04:05Z",
@@ -344,7 +349,7 @@ func TestBindCompositeAndTime(t *testing.T) {
 
 // dotted names descend into nested map/JSON values (validation + bind).
 func TestNestedJSONLookupAndBind(t *testing.T) {
-	vd := JSON(`{"Inner":{"City":"LA"}}`, map[string]string{"Inner.City": "required && alpha"})
+	vd := MustJSON(`{"Inner":{"City":"LA"}}`, map[string]string{"Inner.City": "required && alpha"})
 	vd.Validate(context.Background())
 	if vd.Errors().Has("Inner.City") {
 		t.Errorf("nested JSON Inner.City should resolve and pass, got %v", vd.Errors().All())
@@ -363,29 +368,29 @@ func TestNestedJSONLookupAndBind(t *testing.T) {
 // A failed map-key conversion must not fabricate a phantom zero key.
 func TestBindMapTypedKeyNoPhantom(t *testing.T) {
 	type T struct{ M map[int]string }
-	vd := Map(map[string]any{"M": map[string]any{"bad": "x", "1": "one"}}, map[string]string{})
-	var out T
-	if err := vd.Bind(&out); err != nil {
-		t.Fatal(err)
+	vd := MustMap(map[string]any{"M": map[string]any{"bad": "x", "1": "one"}}, map[string]string{})
+	out := T{M: map[int]string{9: "keep"}}
+	if err := vd.Bind(&out); !errors.Is(err, ErrBindConversion) {
+		t.Fatalf("error = %v", err)
 	}
 	if _, has0 := out.M[0]; has0 {
 		t.Errorf("a failed key must not fabricate a 0 entry: %v", out.M)
 	}
-	if out.M[1] != "one" {
-		t.Errorf("the valid key should bind: %v", out.M)
+	if len(out.M) != 1 || out.M[9] != "keep" {
+		t.Errorf("failed map bind mutated destination: %v", out.M)
 	}
 }
 
 // A failed slice element stays zero in place; dropping it would shift later indices.
-func TestBindSliceFailedElementKeepsPosition(t *testing.T) {
+func TestBindSliceFailedElementRejectsWholeBind(t *testing.T) {
 	type T struct{ Nums []int }
-	vd := Map(map[string]any{"Nums": []any{1, "x", 3}}, map[string]string{})
-	var out T
-	if err := vd.Bind(&out); err != nil {
-		t.Fatal(err)
+	vd := MustMap(map[string]any{"Nums": []any{1, "x", 3}}, map[string]string{})
+	out := T{Nums: []int{9}}
+	if err := vd.Bind(&out); !errors.Is(err, ErrBindConversion) {
+		t.Fatalf("error = %v", err)
 	}
-	if len(out.Nums) != 3 || out.Nums[0] != 1 || out.Nums[1] != 0 || out.Nums[2] != 3 {
-		t.Errorf("a failed element must keep its position as zero, got %v", out.Nums)
+	if len(out.Nums) != 1 || out.Nums[0] != 9 {
+		t.Errorf("failed slice bind mutated destination: %v", out.Nums)
 	}
 }
 
@@ -393,7 +398,7 @@ func TestBindSliceFailedElementKeepsPosition(t *testing.T) {
 func TestBindSliceOfStruct(t *testing.T) {
 	type Inner struct{ City string }
 	type T struct{ Items []Inner }
-	vd := Map(map[string]any{"Items": []any{
+	vd := MustMap(map[string]any{"Items": []any{
 		map[string]any{"City": "NYC"},
 		map[string]any{"City": "LA"},
 	}}, map[string]string{})
@@ -411,25 +416,25 @@ func TestBindPointerPreservedOnFailure(t *testing.T) {
 	type T struct{ Ptr *int }
 	pre := 99
 	out := T{Ptr: &pre}
-	vd := Map(map[string]any{"Ptr": "notanint"}, map[string]string{})
-	if err := vd.Bind(&out); err != nil {
-		t.Fatal(err)
+	vd := MustMap(map[string]any{"Ptr": "notanint"}, map[string]string{})
+	if err := vd.Bind(&out); !errors.Is(err, ErrBindConversion) {
+		t.Fatalf("error = %v", err)
 	}
 	if out.Ptr == nil || *out.Ptr != 99 {
 		t.Errorf("a failed conversion must leave the pointer untouched (was 99), got %v", out.Ptr)
 	}
 }
 
-// float32 overflow is skipped, not written as +Inf.
+// float32 overflow rejects the bind and is not written as +Inf.
 func TestBindFloat32Overflow(t *testing.T) {
 	type T struct{ F float32 }
-	out := T{}
-	vd := Map(map[string]any{"F": "1e100"}, map[string]string{})
-	if err := vd.Bind(&out); err != nil {
-		t.Fatal(err)
+	out := T{F: 1}
+	vd := MustMap(map[string]any{"F": "1e100"}, map[string]string{})
+	if err := vd.Bind(&out); !errors.Is(err, ErrBindConversion) {
+		t.Fatalf("error = %v", err)
 	}
-	if out.F != 0 {
-		t.Errorf("float32 overflow must be skipped (stay 0), got %v", out.F)
+	if out.F != 1 {
+		t.Errorf("float32 overflow mutated destination, got %v", out.F)
 	}
 }
 
@@ -440,7 +445,7 @@ func TestBindByteRuneSliceFromString(t *testing.T) {
 		R []rune
 		J json.RawMessage
 	}
-	vd := Map(map[string]any{"B": "hello", "R": "world", "J": `{"a":1}`}, map[string]string{})
+	vd := MustMap(map[string]any{"B": "hello", "R": "world", "J": `{"a":1}`}, map[string]string{})
 	var out T
 	if err := vd.Bind(&out); err != nil {
 		t.Fatal(err)
@@ -462,7 +467,7 @@ func TestDashKeepsFieldBindableAndResolvable(t *testing.T) {
 		Email    string `validate:"required && email"`
 		Internal string `validate:"-"`
 	}
-	vd := Struct(T{Email: "a@b.com", Internal: "keep-me"})
+	vd := MustStruct(T{Email: "a@b.com", Internal: "keep-me"})
 	vd.Validate(context.Background())
 	if vd.Fails() {
 		t.Errorf(`validate:"-" field must not be validated: %v`, vd.Errors().All())
@@ -480,12 +485,12 @@ func TestDashKeepsFieldBindableAndResolvable(t *testing.T) {
 		Secret string `validate:"-"`
 		Echo   string `validate:"same:Secret"`
 	}
-	good := Struct(F{Secret: "x", Echo: "x"})
+	good := MustStruct(F{Secret: "x", Echo: "x"})
 	good.Validate(context.Background())
 	if good.Fails() {
 		t.Errorf(`same:Secret should resolve a "-" field, got %v`, good.Errors().All())
 	}
-	mism := Struct(F{Secret: "x", Echo: "y"})
+	mism := MustStruct(F{Secret: "x", Echo: "y"})
 	mism.Validate(context.Background())
 	if !mism.Fails() {
 		t.Error("mismatched same:Secret should fail")
@@ -499,7 +504,7 @@ func TestBindPointerElements(t *testing.T) {
 		S []int64
 		M map[string]int64
 	}
-	vd := Map(map[string]any{
+	vd := MustMap(map[string]any{
 		"S": []*int{&a, &b},
 		"M": map[string]*int{"x": &a},
 	}, map[string]string{})
@@ -519,7 +524,7 @@ func TestBindPointerElements(t *testing.T) {
 func TestBindSlicePositionalWithNil(t *testing.T) {
 	a, c := 1, 3
 	type T struct{ P []*int64 }
-	vd := Map(map[string]any{"P": []*int{&a, nil, &c}}, map[string]string{})
+	vd := MustMap(map[string]any{"P": []*int{&a, nil, &c}}, map[string]string{})
 	var out T
 	if err := vd.Bind(&out); err != nil {
 		t.Fatal(err)
@@ -542,17 +547,17 @@ func TestBindSlicePositionalWithNil(t *testing.T) {
 func TestBindNoGhostPointersOnFailure(t *testing.T) {
 	type Inner struct{ N int }
 	type T struct{ In *Inner }
-	vd := Map(map[string]any{"In.N": "not-a-number"}, map[string]string{})
+	vd := MustMap(map[string]any{"In.N": "not-a-number"}, map[string]string{})
 	var out T
-	if err := vd.Bind(&out); err != nil {
-		t.Fatal(err)
+	if err := vd.Bind(&out); !errors.Is(err, ErrBindConversion) {
+		t.Fatalf("error = %v", err)
 	}
 	if out.In != nil {
 		t.Errorf("a failed leaf conversion must not fabricate the intermediate pointer, got %+v", out.In)
 	}
 
 	// the success path still allocates the chain
-	ok := Map(map[string]any{"In": map[string]any{"N": "42"}}, map[string]string{})
+	ok := MustMap(map[string]any{"In": map[string]any{"N": "42"}}, map[string]string{})
 	var out2 T
 	if err := ok.Bind(&out2); err != nil {
 		t.Fatal(err)
@@ -568,7 +573,7 @@ func TestBindMapKeyCollisionDeterministic(t *testing.T) {
 	src := map[any]any{1: "int-one", "1": "str-one"}
 	var want string
 	for i := range 20 {
-		vd := Map(map[string]any{"M": src}, map[string]string{})
+		vd := MustMap(map[string]any{"M": src}, map[string]string{})
 		var out T
 		if err := vd.Bind(&out); err != nil {
 			t.Fatal(err)

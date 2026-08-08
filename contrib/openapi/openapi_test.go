@@ -1,6 +1,7 @@
 package openapi_test
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -37,14 +38,14 @@ type page struct {
 func build(t *testing.T) string {
 	t.Helper()
 
-	g := openapi.New("test-api", "1.0.0")
-	if err := g.Add(http.MethodGet, "/users", openapi.Op{Request: paginate{}, Response: page{}}); err != nil {
+	g := openapi.MustNew("test-api", "1.0.0")
+	if err := g.Add[paginate](http.MethodGet, "/users", openapi.WithResponse[page](http.StatusOK)); err != nil {
 		t.Fatal(err)
 	}
-	if err := g.Add(http.MethodPost, "/users", openapi.Op{Request: userAdd{}, Response: user{}}); err != nil {
+	if err := g.Add[userAdd](http.MethodPost, "/users", openapi.WithResponse[user](http.StatusOK)); err != nil {
 		t.Fatal(err)
 	}
-	if err := g.Add(http.MethodGet, "/users/{id}", openapi.Op{Request: userID{}, Response: user{}}); err != nil {
+	if err := g.Add[userID](http.MethodGet, "/users/{id}", openapi.WithResponse[user](http.StatusOK)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -113,8 +114,8 @@ type listRequest struct {
 }
 
 func TestEmbeddedStructsFlatten(t *testing.T) {
-	g := openapi.New("t", "1")
-	if err := g.Add(http.MethodPost, "/x", openapi.Op{Request: listRequest{}}); err != nil {
+	g := openapi.MustNew("t", "1")
+	if err := g.Add[listRequest](http.MethodPost, "/x", openapi.WithResponse[openapi.NoBody](http.StatusOK)); err != nil {
 		t.Fatal(err)
 	}
 	blob, _ := g.JSON()
@@ -134,8 +135,8 @@ func TestByteSliceIsBase64String(t *testing.T) {
 	type req struct {
 		Payload []byte `json:"payload" validate:"required"`
 	}
-	g := openapi.New("t", "1")
-	_ = g.Add(http.MethodPost, "/x", openapi.Op{Request: req{}})
+	g := openapi.MustNew("t", "1")
+	_ = g.Add[req](http.MethodPost, "/x", openapi.WithResponse[openapi.NoBody](http.StatusOK))
 	blob, _ := g.JSON()
 	if !strings.Contains(string(blob), `"contentEncoding": "base64"`) || strings.Contains(string(blob), `"type": "array"`) {
 		t.Errorf("[]byte must be a base64 string schema:\n%s", blob)
@@ -149,8 +150,8 @@ func TestExclusiveLengthBounds(t *testing.T) {
 		Name string   `json:"name" validate:"gt:3 && lt:10"`
 		Tags []string `json:"tags" validate:"gt:1"`
 	}
-	g := openapi.New("t", "1")
-	_ = g.Add(http.MethodPost, "/x", openapi.Op{Request: req{}})
+	g := openapi.MustNew("t", "1")
+	_ = g.Add[req](http.MethodPost, "/x", openapi.WithResponse[openapi.NoBody](http.StatusOK))
 	blob, _ := g.JSON()
 	spec := string(blob)
 	for _, want := range []string{`"minLength": 4`, `"maxLength": 9`, `"minItems": 2`} {
@@ -165,8 +166,8 @@ func TestMapElementRules(t *testing.T) {
 	type req struct {
 		Labels map[string]string `json:"labels" validate:"dive && min:2"`
 	}
-	g := openapi.New("t", "1")
-	_ = g.Add(http.MethodPost, "/x", openapi.Op{Request: req{}})
+	g := openapi.MustNew("t", "1")
+	_ = g.Add[req](http.MethodPost, "/x", openapi.WithResponse[openapi.NoBody](http.StatusOK))
 	blob, _ := g.JSON()
 	if !strings.Contains(string(blob), `"minLength": 2`) {
 		t.Errorf("map element rules must apply to additionalProperties:\n%s", blob)
@@ -179,8 +180,8 @@ func TestNumericStringHint(t *testing.T) {
 	type req struct {
 		Age string `json:"age" validate:"numeric && gte:18 && lte:120"`
 	}
-	g := openapi.New("t", "1")
-	_ = g.Add(http.MethodPost, "/x", openapi.Op{Request: req{}})
+	g := openapi.MustNew("t", "1")
+	_ = g.Add[req](http.MethodPost, "/x", openapi.WithResponse[openapi.NoBody](http.StatusOK))
 	blob, _ := g.JSON()
 	spec := string(blob)
 	if strings.Contains(spec, "minLength") || strings.Contains(spec, "maxLength") {
@@ -196,8 +197,8 @@ func TestUniqueAndPort(t *testing.T) {
 	type req struct {
 		Ports []int `json:"ports" validate:"unique && dive && port"`
 	}
-	g := openapi.New("t", "1")
-	_ = g.Add(http.MethodPost, "/x", openapi.Op{Request: req{}})
+	g := openapi.MustNew("t", "1")
+	_ = g.Add[req](http.MethodPost, "/x", openapi.WithResponse[openapi.NoBody](http.StatusOK))
 	blob, _ := g.JSON()
 	spec := string(blob)
 	for _, want := range []string{`"uniqueItems": true`, `"minimum": 1`, `"maximum": 65535`} {
@@ -216,8 +217,8 @@ func TestQueryParamsOnBodyMethods(t *testing.T) {
 		Page   uint   `json:"page" query:"page"` // json+query: parameter wins
 		Name   string `json:"name" validate:"required"`
 	}
-	g := openapi.New("t", "1")
-	if err := g.Add(http.MethodPost, "/x", openapi.Op{Request: req{}}); err != nil {
+	g := openapi.MustNew("t", "1")
+	if err := g.Add[req](http.MethodPost, "/x", openapi.WithResponse[openapi.NoBody](http.StatusOK)); err != nil {
 		t.Fatal(err)
 	}
 	blob, _ := g.JSON()
@@ -240,8 +241,8 @@ func TestMalformedTagFailsAdd(t *testing.T) {
 	type bad struct {
 		Name string `json:"name" validate:"required && no_such_rule_here"`
 	}
-	g := openapi.New("t", "1")
-	if err := g.Add(http.MethodPost, "/x", openapi.Op{Request: bad{}}); err == nil {
+	g := openapi.MustNew("t", "1")
+	if err := g.Add[bad](http.MethodPost, "/x", openapi.WithResponse[openapi.NoBody](http.StatusOK)); err == nil {
 		t.Fatal("a request type with a malformed validate tag must fail Add")
 	}
 	// the poisoned operation must not be published
@@ -249,8 +250,8 @@ func TestMalformedTagFailsAdd(t *testing.T) {
 		t.Error("a failed Add must not register the path")
 	}
 	// response types are held to the same bar
-	g2 := openapi.New("t", "1")
-	if err := g2.Add(http.MethodGet, "/y", openapi.Op{Response: bad{}}); err == nil {
+	g2 := openapi.MustNew("t", "1")
+	if err := g2.Add[openapi.NoBody](http.MethodGet, "/y", openapi.WithResponse[bad](http.StatusOK)); err == nil {
 		t.Fatal("a response type with a malformed validate tag must fail Add")
 	}
 }
@@ -265,8 +266,8 @@ func TestRequiredStructField(t *testing.T) {
 		Name    string   `json:"name" validate:"required"`
 		Profile *profile `json:"profile" validate:"required"`
 	}
-	g := openapi.New("t", "1")
-	if err := g.Add(http.MethodPost, "/x", openapi.Op{Request: user{}}); err != nil {
+	g := openapi.MustNew("t", "1")
+	if err := g.Add[user](http.MethodPost, "/x", openapi.WithResponse[openapi.NoBody](http.StatusOK)); err != nil {
 		t.Fatal(err)
 	}
 	blob, _ := g.JSON()
@@ -290,8 +291,8 @@ func TestRecursivePointerType(t *testing.T) {
 	type req struct {
 		P recPtr `json:"p"`
 	}
-	g := openapi.New("t", "1")
-	if err := g.Add(http.MethodPost, "/x", openapi.Op{Request: req{}}); err != nil {
+	g := openapi.MustNew("t", "1")
+	if err := g.Add[req](http.MethodPost, "/x", openapi.WithResponse[openapi.NoBody](http.StatusOK)); err != nil {
 		t.Fatal(err)
 	}
 	blob, err := g.JSON()
@@ -310,9 +311,9 @@ type envelopepage struct {
 }
 
 func TestComponentNameCollision(t *testing.T) {
-	g := openapi.New("t", "1")
-	_ = g.Add(http.MethodGet, "/a", openapi.Op{Response: envelope[page]{}}) // flattens to "envelopepage"
-	_ = g.Add(http.MethodGet, "/b", openapi.Op{Response: envelopepage{}})   // literal "envelopepage"
+	g := openapi.MustNew("t", "1")
+	_ = g.Add[openapi.NoBody](http.MethodGet, "/a", openapi.WithResponse[envelope[page]](http.StatusOK)) // flattens to "envelopepage"
+	_ = g.Add[openapi.NoBody](http.MethodGet, "/b", openapi.WithResponse[envelopepage](http.StatusOK))   // literal "envelopepage"
 	schemas := g.Document().Components.Schemas
 	if len(schemas) < 4 { // envelopepage, envelopepage2, page, user
 		t.Fatalf("colliding component names must get distinct entries, got %v", keysOf(schemas))
@@ -336,8 +337,8 @@ type envelope[T any] struct {
 }
 
 func TestNestedGenericComponentNames(t *testing.T) {
-	g := openapi.New("t", "1")
-	if err := g.Add(http.MethodGet, "/x", openapi.Op{Response: envelope[page]{}}); err != nil {
+	g := openapi.MustNew("t", "1")
+	if err := g.Add[openapi.NoBody](http.MethodGet, "/x", openapi.WithResponse[envelope[page]](http.StatusOK)); err != nil {
 		t.Fatal(err)
 	}
 	blob, _ := g.JSON()
@@ -351,5 +352,173 @@ func TestNestedGenericComponentNames(t *testing.T) {
 				t.Errorf("component name %q contains raw type syntax", name)
 			}
 		}
+	}
+}
+
+func TestNew_ValidatesConfiguration(t *testing.T) {
+	if _, err := openapi.New("", "1"); !errors.Is(err, openapi.ErrInvalidOption) {
+		t.Fatalf("empty title error = %v", err)
+	}
+	if _, err := openapi.New("title", ""); !errors.Is(err, openapi.ErrInvalidOption) {
+		t.Fatalf("empty version error = %v", err)
+	}
+	if _, err := openapi.New("title", "1", nil); !errors.Is(err, openapi.ErrInvalidOption) {
+		t.Fatalf("nil option error = %v", err)
+	}
+	if _, err := openapi.New("title", "1", openapi.WithValidator(nil)); !errors.Is(err, openapi.ErrInvalidOption) {
+		t.Fatalf("nil validator error = %v", err)
+	}
+}
+
+func TestMustNew_PanicsOnInvalidConfiguration(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("MustNew did not panic")
+		}
+	}()
+	openapi.MustNew("", "1")
+}
+
+func TestOperationOptionsAndNoBody(t *testing.T) {
+	g := openapi.MustNew("t", "1")
+	if err := g.Add[openapi.NoBody](
+		http.MethodDelete,
+		"/users/{id}",
+		openapi.WithSummary("Delete a user"),
+		openapi.WithTags("users"),
+		openapi.WithResponse[openapi.NoBody](http.StatusNoContent),
+	); err != nil {
+		t.Fatal(err)
+	}
+	doc := g.Document()
+	operation := doc.Paths["/users/{id}"]["delete"]
+	if operation.Summary != "Delete a user" || len(operation.Tags) != 1 {
+		t.Fatalf("operation = %+v", operation)
+	}
+	response := operation.Responses["204"]
+	if response == nil || response.Content != nil {
+		t.Fatalf("response = %+v", response)
+	}
+	if err := g.Add[openapi.NoBody](http.MethodDelete, "/users/{id}", openapi.WithResponse[openapi.NoBody](http.StatusOK)); !errors.Is(err, openapi.ErrOperationExists) {
+		t.Fatalf("duplicate error = %v", err)
+	}
+	if err := g.Add[openapi.NoBody]("CONNECT", "/tunnel"); !errors.Is(err, openapi.ErrInvalidOperation) {
+		t.Fatalf("unsupported method error = %v", err)
+	}
+	if err := g.Add[openapi.NoBody](http.MethodGet, "/users?admin=true"); !errors.Is(err, openapi.ErrInvalidOperation) {
+		t.Fatalf("path with query error = %v", err)
+	}
+	if err := g.Add[openapi.NoBody](http.MethodGet, "/nil", nil); !errors.Is(err, openapi.ErrInvalidOption) {
+		t.Fatalf("nil operation option error = %v", err)
+	}
+	if err := g.Add[openapi.NoBody](http.MethodGet, "/status", openapi.WithResponse[openapi.NoBody](99)); !errors.Is(err, openapi.ErrInvalidOperation) {
+		t.Fatalf("invalid status error = %v", err)
+	}
+	if err := g.Add[openapi.NoBody](http.MethodGet, "/missing-response"); !errors.Is(err, openapi.ErrInvalidOperation) {
+		t.Fatalf("missing response error = %v", err)
+	}
+}
+
+func TestMultipleResponses(t *testing.T) {
+	type problem struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	}
+	g := openapi.MustNew("t", "1")
+	err := g.Add[openapi.NoBody](
+		http.MethodGet,
+		"/users/{id}",
+		openapi.WithResponse[user](http.StatusOK),
+		openapi.WithResponse[problem](
+			http.StatusNotFound,
+			openapi.ResponseDescription("User not found"),
+		),
+		openapi.WithDefaultResponse[problem](),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	responses := g.Document().Paths["/users/{id}"]["get"].Responses
+	if len(responses) != 3 || responses["200"] == nil || responses["404"] == nil || responses["default"] == nil {
+		t.Fatalf("responses = %+v", responses)
+	}
+	if responses["404"].Description != "User not found" {
+		t.Fatalf("404 description = %q", responses["404"].Description)
+	}
+	if err := g.Add[openapi.NoBody](
+		http.MethodGet,
+		"/duplicate-responses",
+		openapi.WithResponse[user](http.StatusOK),
+		openapi.WithResponse[problem](http.StatusOK),
+	); !errors.Is(err, openapi.ErrInvalidOperation) {
+		t.Fatalf("duplicate response error = %v", err)
+	}
+}
+
+func TestFailedAddDoesNotPolluteComponents(t *testing.T) {
+	type good struct {
+		ID string `json:"id"`
+	}
+	type bad struct {
+		Value string `json:"value" validate:"unknown_rule"`
+	}
+	type response struct {
+		Good good `json:"good"`
+		Bad  bad  `json:"bad"`
+	}
+
+	g := openapi.MustNew("t", "1")
+	if err := g.Add[openapi.NoBody](
+		http.MethodGet,
+		"/broken",
+		openapi.WithResponse[response](http.StatusOK),
+	); err == nil {
+		t.Fatal("invalid nested response was accepted")
+	}
+	doc := g.Document()
+	if len(doc.Paths) != 0 || len(doc.Components.Schemas) != 0 {
+		t.Fatalf("failed transaction leaked state: paths=%v schemas=%v", doc.Paths, keysOf(doc.Components.Schemas))
+	}
+	if err := g.Add[openapi.NoBody](
+		http.MethodGet,
+		"/good",
+		openapi.WithResponse[good](http.StatusOK),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := g.Document().Components.Schemas["good"]; !ok {
+		t.Fatalf("failed transaction consumed component name: %v", keysOf(g.Document().Components.Schemas))
+	}
+}
+
+func TestSchemaOptionAndDocumentAreDefensive(t *testing.T) {
+	type identifier string
+	schema := &openapi.Schema{Type: "string", Format: "uuid"}
+	g := openapi.MustNew("t", "1", openapi.WithSchema[identifier](schema))
+	schema.Format = "mutated"
+	if err := g.Add[openapi.NoBody](http.MethodGet, "/id", openapi.WithResponse[identifier](http.StatusOK)); err != nil {
+		t.Fatal(err)
+	}
+	doc := g.Document()
+	delete(doc.Paths, "/id")
+	if _, ok := g.Document().Paths["/id"]; !ok {
+		t.Fatal("Document exposed mutable generator state")
+	}
+	first, err := g.JSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := g.JSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(first) != string(second) || strings.Contains(string(first), "mutated") {
+		t.Fatalf("JSON is unstable or schema was aliased:\n%s", first)
+	}
+	if _, err := openapi.New("t", "1", openapi.WithSchema[int](nil)); !errors.Is(err, openapi.ErrInvalidOption) {
+		t.Fatalf("nil schema error = %v", err)
+	}
+	if _, err := openapi.New("t", "1", openapi.WithSchema[openapi.NoBody](&openapi.Schema{})); !errors.Is(err, openapi.ErrInvalidOption) {
+		t.Fatalf("NoBody schema error = %v", err)
 	}
 }

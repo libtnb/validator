@@ -30,49 +30,44 @@ var (
 	_ Rule = (*neIgnoreCaseRule)(nil)
 )
 
-// inRule: value must be one of the args.
 type inRule struct{}
 
 func (r *inRule) Signature() string { return "in" }
 
-func (r *inRule) Passes(f Field) bool { return inSet(f, true) }
+func (r *inRule) Passes(f *Field) bool { return inSet(f, true) }
 
 func (r *inRule) Message() string { return "The selected {field} is invalid." }
 
-// notInRule: value must not be one of the args.
 type notInRule struct{}
 
 func (r *notInRule) Signature() string { return "not_in" }
 
-func (r *notInRule) Passes(f Field) bool { return inSet(f, false) }
+func (r *notInRule) Passes(f *Field) bool { return inSet(f, false) }
 
 func (r *notInRule) Message() string { return "The selected {field} is invalid." }
 
-// eqRule: value must equal the arg.
 type eqRule struct{}
 
 func (r *eqRule) Signature() string { return "eq" }
 
-func (r *eqRule) Passes(f Field) bool { return eqArg(f, true, false) }
+func (r *eqRule) Passes(f *Field) bool { return eqArg(f, true, false) }
 
 func (r *eqRule) Message() string { return "The {field} must be equal to {0}." }
 
-// neRule: value must not equal the arg.
 type neRule struct{}
 
 func (r *neRule) Signature() string { return "ne" }
 
-func (r *neRule) Passes(f Field) bool { return eqArg(f, false, true) }
+func (r *neRule) Passes(f *Field) bool { return eqArg(f, false, true) }
 
 func (r *neRule) Message() string { return "The {field} must not be equal to {0}." }
 
-// inCiRule: value must case-insensitively equal one of the args.
 type inCiRule struct{}
 
 func (r *inCiRule) Signature() string { return "in_ci" }
 
-func (r *inCiRule) Passes(f Field) bool {
-	rv := f.Val()
+func (r *inCiRule) Passes(f *Field) bool {
+	rv := f.Reflect()
 	if isEmptyV(rv) {
 		return true
 	}
@@ -82,21 +77,19 @@ func (r *inCiRule) Passes(f Field) bool {
 
 func (r *inCiRule) Message() string { return "The selected {field} is invalid." }
 
-// eqIgnoreCaseRule: value must case-insensitively equal the arg.
 type eqIgnoreCaseRule struct{}
 
 func (r *eqIgnoreCaseRule) Signature() string { return "eq_ignore_case" }
 
-func (r *eqIgnoreCaseRule) Passes(f Field) bool { return eqFoldArg(f, true, false) }
+func (r *eqIgnoreCaseRule) Passes(f *Field) bool { return eqFoldArg(f, true, false) }
 
 func (r *eqIgnoreCaseRule) Message() string { return "The {field} must be equal to {0}." }
 
-// neIgnoreCaseRule: value must not case-insensitively equal the arg.
 type neIgnoreCaseRule struct{}
 
 func (r *neIgnoreCaseRule) Signature() string { return "ne_ignore_case" }
 
-func (r *neIgnoreCaseRule) Passes(f Field) bool { return eqFoldArg(f, false, true) }
+func (r *neIgnoreCaseRule) Passes(f *Field) bool { return eqFoldArg(f, false, true) }
 
 func (r *neIgnoreCaseRule) Message() string { return "The {field} must not be equal to {0}." }
 
@@ -155,8 +148,8 @@ func argMatches(rv reflect.Value, vs, arg string) bool {
 	return false
 }
 
-func inSet(f Field, want bool) bool {
-	rv := f.Val()
+func inSet(f *Field, want bool) bool {
+	rv := f.Reflect()
 	if isEmptyV(rv) {
 		return true
 	}
@@ -168,8 +161,8 @@ func inSet(f Field, want bool) bool {
 }
 
 // eqArg evaluates eq/ne; no arg returns whenNoArg.
-func eqArg(f Field, equal, whenNoArg bool) bool {
-	rv := f.Val()
+func eqArg(f *Field, equal, whenNoArg bool) bool {
+	rv := f.Reflect()
 	if isEmptyV(rv) {
 		return true
 	}
@@ -181,8 +174,8 @@ func eqArg(f Field, equal, whenNoArg bool) bool {
 }
 
 // eqFoldArg is eqArg's case-insensitive form (string comparison only).
-func eqFoldArg(f Field, equal, whenNoArg bool) bool {
-	rv := f.Val()
+func eqFoldArg(f *Field, equal, whenNoArg bool) bool {
+	rv := f.Reflect()
 	if isEmptyV(rv) {
 		return true
 	}

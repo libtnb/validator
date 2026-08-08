@@ -67,28 +67,11 @@ var (
 	_ argChecker = (*excludedWithoutRule)(nil)
 )
 
-// checkSiblingValueArgs: rule:Field,val… needs a sibling name plus at least one value.
-func checkSiblingValueArgs(args []string) error {
-	if len(args) < 2 {
-		return errors.New("needs a sibling field and at least one value (rule:Field,val…)")
-	}
-	return nil
-}
-
-// checkSiblingArgs: rule:Field… needs at least one sibling name.
-func checkSiblingArgs(args []string) error {
-	if len(args) == 0 {
-		return errors.New("needs at least one sibling field name")
-	}
-	return nil
-}
-
-// requiredIfRule: required when another field equals any listed value.
 type requiredIfRule struct{ strict bool }
 
 func (r *requiredIfRule) Signature() string { return "required_if" }
 
-func (r *requiredIfRule) Passes(f Field) bool {
+func (r *requiredIfRule) Passes(f *Field) bool {
 	attrs := f.Attrs()
 	if len(attrs) < 2 {
 		return true
@@ -109,14 +92,11 @@ func (r *requiredIfRule) Message() string {
 	return "The {field} field is required when {0} is {1+}."
 }
 
-func (r *requiredIfRule) withStrict() Rule { return &requiredIfRule{strict: true} }
-
-// requiredUnlessRule: required unless another field equals any listed value.
 type requiredUnlessRule struct{ strict bool }
 
 func (r *requiredUnlessRule) Signature() string { return "required_unless" }
 
-func (r *requiredUnlessRule) Passes(f Field) bool {
+func (r *requiredUnlessRule) Passes(f *Field) bool {
 	attrs := f.Attrs()
 	if len(attrs) < 2 {
 		return true
@@ -138,14 +118,11 @@ func (r *requiredUnlessRule) Message() string {
 	return "The {field} field is required unless {0} is {1+}."
 }
 
-func (r *requiredUnlessRule) withStrict() Rule { return &requiredUnlessRule{strict: true} }
-
-// requiredWithRule: required when any listed field is present.
 type requiredWithRule struct{ strict bool }
 
 func (r *requiredWithRule) Signature() string { return "required_with" }
 
-func (r *requiredWithRule) Passes(f Field) bool {
+func (r *requiredWithRule) Passes(f *Field) bool {
 	attrs := f.Attrs()
 	if len(attrs) == 0 {
 		return true
@@ -164,14 +141,11 @@ func (r *requiredWithRule) Message() string {
 	return "The {field} field is required when {0} is present."
 }
 
-func (r *requiredWithRule) withStrict() Rule { return &requiredWithRule{strict: true} }
-
-// requiredWithoutRule: required when any listed field is missing/empty.
 type requiredWithoutRule struct{ strict bool }
 
 func (r *requiredWithoutRule) Signature() string { return "required_without" }
 
-func (r *requiredWithoutRule) Passes(f Field) bool {
+func (r *requiredWithoutRule) Passes(f *Field) bool {
 	attrs := f.Attrs()
 	if len(attrs) == 0 {
 		return true
@@ -191,14 +165,11 @@ func (r *requiredWithoutRule) Message() string {
 	return "The {field} field is required when {0} is not present."
 }
 
-func (r *requiredWithoutRule) withStrict() Rule { return &requiredWithoutRule{strict: true} }
-
-// requiredWithAllRule: required when every listed field is present.
 type requiredWithAllRule struct{ strict bool }
 
 func (r *requiredWithAllRule) Signature() string { return "required_with_all" }
 
-func (r *requiredWithAllRule) Passes(f Field) bool {
+func (r *requiredWithAllRule) Passes(f *Field) bool {
 	attrs := f.Attrs()
 	if len(attrs) == 0 {
 		return true
@@ -217,14 +188,11 @@ func (r *requiredWithAllRule) Message() string {
 	return "The {field} field is required when {0+} are present."
 }
 
-func (r *requiredWithAllRule) withStrict() Rule { return &requiredWithAllRule{strict: true} }
-
-// requiredWithoutAllRule: required when every listed field is missing/empty.
 type requiredWithoutAllRule struct{ strict bool }
 
 func (r *requiredWithoutAllRule) Signature() string { return "required_without_all" }
 
-func (r *requiredWithoutAllRule) Passes(f Field) bool {
+func (r *requiredWithoutAllRule) Passes(f *Field) bool {
 	attrs := f.Attrs()
 	if len(attrs) == 0 {
 		return true
@@ -243,16 +211,13 @@ func (r *requiredWithoutAllRule) Message() string {
 	return "The {field} field is required when none of {0+} are present."
 }
 
-func (r *requiredWithoutAllRule) withStrict() Rule { return &requiredWithoutAllRule{strict: true} }
-
-// excludedIfRule: must be empty when another field equals any listed value.
 type excludedIfRule struct{}
 
 func (r *excludedIfRule) Signature() string { return "excluded_if" }
 
-func (r *excludedIfRule) Passes(f Field) bool {
+func (r *excludedIfRule) Passes(f *Field) bool {
 	attrs := f.Attrs()
-	if len(attrs) < 2 || isEmptyV(f.Val()) {
+	if len(attrs) < 2 || isEmptyV(f.Reflect()) {
 		return true
 	}
 	other, ok := crossSibling(f, attrs[0])
@@ -268,14 +233,13 @@ func (r *excludedIfRule) Message() string {
 	return "The {field} field must be empty when {0} is {1+}."
 }
 
-// excludedUnlessRule: must be empty unless another field equals any listed value.
 type excludedUnlessRule struct{}
 
 func (r *excludedUnlessRule) Signature() string { return "excluded_unless" }
 
-func (r *excludedUnlessRule) Passes(f Field) bool {
+func (r *excludedUnlessRule) Passes(f *Field) bool {
 	attrs := f.Attrs()
-	if len(attrs) < 2 || isEmptyV(f.Val()) {
+	if len(attrs) < 2 || isEmptyV(f.Reflect()) {
 		return true
 	}
 	// absent sibling can't match -> exclusion applies
@@ -292,14 +256,13 @@ func (r *excludedUnlessRule) Message() string {
 	return "The {field} field must be empty unless {0} is {1+}."
 }
 
-// excludedWithRule: must be empty when any listed field is present.
 type excludedWithRule struct{}
 
 func (r *excludedWithRule) Signature() string { return "excluded_with" }
 
-func (r *excludedWithRule) Passes(f Field) bool {
+func (r *excludedWithRule) Passes(f *Field) bool {
 	attrs := f.Attrs()
-	if len(attrs) == 0 || isEmptyV(f.Val()) {
+	if len(attrs) == 0 || isEmptyV(f.Reflect()) {
 		return true
 	}
 	for _, name := range attrs {
@@ -316,14 +279,13 @@ func (r *excludedWithRule) Message() string {
 	return "The {field} field must be empty when {0} is present."
 }
 
-// excludedWithoutRule: must be empty when any listed field is missing/empty.
 type excludedWithoutRule struct{}
 
 func (r *excludedWithoutRule) Signature() string { return "excluded_without" }
 
-func (r *excludedWithoutRule) Passes(f Field) bool {
+func (r *excludedWithoutRule) Passes(f *Field) bool {
 	attrs := f.Attrs()
-	if len(attrs) == 0 || isEmptyV(f.Val()) {
+	if len(attrs) == 0 || isEmptyV(f.Reflect()) {
 		return true
 	}
 	for _, name := range attrs {
@@ -340,135 +302,129 @@ func (r *excludedWithoutRule) Message() string {
 	return "The {field} field must be empty when {0} is not present."
 }
 
-// sameRule: equals another field string-wise.
 type sameRule struct{}
 
 func (r *sameRule) Signature() string { return "same" }
 
-func (r *sameRule) Passes(f Field) bool {
+func (r *sameRule) Passes(f *Field) bool {
 	return crossStringCompare(f, true, false)
 }
 
 func (r *sameRule) Message() string { return "The {field} and {0} must match." }
 
-// differentRule: differs from another field string-wise.
 type differentRule struct{}
 
 func (r *differentRule) Signature() string { return "different" }
 
-func (r *differentRule) Passes(f Field) bool {
+func (r *differentRule) Passes(f *Field) bool {
 	return crossStringCompare(f, false, true)
 }
 
 func (r *differentRule) Message() string { return "The {field} and {0} must be different." }
 
-// eqFieldRule: alias of same.
 type eqFieldRule struct{}
 
 func (r *eqFieldRule) Signature() string { return "eqfield" }
 
-func (r *eqFieldRule) Passes(f Field) bool {
+func (r *eqFieldRule) Passes(f *Field) bool {
 	return crossStringCompare(f, true, false)
 }
 
 func (r *eqFieldRule) Message() string { return "The {field} and {0} must match." }
 
-// neFieldRule: alias of different.
 type neFieldRule struct{}
 
 func (r *neFieldRule) Signature() string { return "nefield" }
 
-func (r *neFieldRule) Passes(f Field) bool {
+func (r *neFieldRule) Passes(f *Field) bool {
 	return crossStringCompare(f, false, true)
 }
 
 func (r *neFieldRule) Message() string { return "The {field} and {0} must be different." }
 
-// gtFieldRule: numerically greater than another field.
 type gtFieldRule struct{}
 
 func (r *gtFieldRule) Signature() string { return "gtfield" }
 
-func (r *gtFieldRule) Passes(f Field) bool {
+func (r *gtFieldRule) Passes(f *Field) bool {
 	return crossNumericCompare(f, func(self, other float64) bool { return self > other })
 }
 
 func (r *gtFieldRule) Message() string { return "The {field} must be greater than {0}." }
 
-// gteFieldRule: numerically >= another field.
 type gteFieldRule struct{}
 
 func (r *gteFieldRule) Signature() string { return "gtefield" }
 
-func (r *gteFieldRule) Passes(f Field) bool {
+func (r *gteFieldRule) Passes(f *Field) bool {
 	return crossNumericCompare(f, func(self, other float64) bool { return self >= other })
 }
 
 func (r *gteFieldRule) Message() string { return "The {field} must be greater than or equal to {0}." }
 
-// ltFieldRule: numerically less than another field.
 type ltFieldRule struct{}
 
 func (r *ltFieldRule) Signature() string { return "ltfield" }
 
-func (r *ltFieldRule) Passes(f Field) bool {
+func (r *ltFieldRule) Passes(f *Field) bool {
 	return crossNumericCompare(f, func(self, other float64) bool { return self < other })
 }
 
 func (r *ltFieldRule) Message() string { return "The {field} must be less than {0}." }
 
-// lteFieldRule: numerically <= another field.
 type lteFieldRule struct{}
 
 func (r *lteFieldRule) Signature() string { return "ltefield" }
 
-func (r *lteFieldRule) Passes(f Field) bool {
+func (r *lteFieldRule) Passes(f *Field) bool {
 	return crossNumericCompare(f, func(self, other float64) bool { return self <= other })
 }
 
 func (r *lteFieldRule) Message() string { return "The {field} must be less than or equal to {0}." }
 
-// confirmedRule: "<field>_confirmation" exists and equals the field string-wise.
 type confirmedRule struct{}
 
 func (r *confirmedRule) Signature() string { return "confirmed" }
 
-func (r *confirmedRule) Passes(f Field) bool {
-	if isEmptyV(f.Val()) {
+func (r *confirmedRule) Passes(f *Field) bool {
+	if isEmptyV(f.Reflect()) {
 		return true
 	}
 	// stable identity, not display name: a dive element's bracketed key ("pw[0]") must not shape the lookup.
 	base := f.Name()
-	if sn, ok := f.(interface{ scopeName() string }); ok {
-		base = sn.scopeName()
+	if scope := f.scopeName(); scope != "" {
+		base = scope
 	}
 	other, ok := crossSibling(f, base+"_confirmation")
 	if !ok {
 		return false
 	}
-	return cmpString(f.Val()) == cmpString(other)
+	return cmpString(f.Reflect()) == cmpString(other)
 }
 
 func (r *confirmedRule) Message() string { return "The {field} confirmation does not match." }
 
-// siblingValuer is the engine's value-only sibling lookup (implemented by *field).
-type siblingValuer interface {
-	SiblingValue(name string) (reflect.Value, bool)
+func (r *requiredIfRule) withStrict() Rule { return &requiredIfRule{strict: true} }
+
+func (r *requiredUnlessRule) withStrict() Rule { return &requiredUnlessRule{strict: true} }
+
+func (r *requiredWithRule) withStrict() Rule { return &requiredWithRule{strict: true} }
+
+func (r *requiredWithoutRule) withStrict() Rule { return &requiredWithoutRule{strict: true} }
+
+func (r *requiredWithAllRule) withStrict() Rule { return &requiredWithAllRule{strict: true} }
+
+func (r *requiredWithoutAllRule) withStrict() Rule {
+	return &requiredWithoutAllRule{strict: true}
 }
 
-func crossSibling(f Field, name string) (reflect.Value, bool) {
-	if sv, ok := f.(siblingValuer); ok {
-		return sv.SiblingValue(name)
-	}
-	if s, ok := f.Sibling(name); ok {
-		return s.Val(), true
-	}
-	return reflect.Value{}, false
+func crossSibling(f *Field, name string) (reflect.Value, bool) {
+	return f.SiblingValue(name)
 }
 
 // crossStringCompare: empty self passes (omitempty); missing arg fails closed.
-func crossStringCompare(f Field, equal, whenMissing bool) bool {
-	if isEmptyV(f.Val()) {
+func crossStringCompare(f *Field, equal, whenMissing bool) bool {
+	if isEmptyV(f.Reflect()) {
 		return true
 	}
 	attrs := f.Attrs()
@@ -479,15 +435,15 @@ func crossStringCompare(f Field, equal, whenMissing bool) bool {
 	if !ok {
 		return whenMissing
 	}
-	eq := cmpString(f.Val()) == cmpString(other)
+	eq := cmpString(f.Reflect()) == cmpString(other)
 	return eq == equal
 }
 
 // crossNumericCompare: empty self passes (omitempty); a time.Time pair compares
 // chronologically (its Compare result feeds cmp as ±1/0 vs 0); otherwise
 // not-both-numeric fails closed.
-func crossNumericCompare(f Field, cmp func(self, other float64) bool) bool {
-	rv := f.Val()
+func crossNumericCompare(f *Field, cmp func(self, other float64) bool) bool {
+	rv := f.Reflect()
 	if isEmptyV(rv) {
 		return true
 	}
@@ -513,4 +469,18 @@ func crossNumericCompare(f Field, cmp func(self, other float64) bool) bool {
 		return false
 	}
 	return cmp(a, b)
+}
+
+func checkSiblingValueArgs(args []string) error {
+	if len(args) < 2 {
+		return errors.New("needs a sibling field and at least one value (rule:Field,val…)")
+	}
+	return nil
+}
+
+func checkSiblingArgs(args []string) error {
+	if len(args) == 0 {
+		return errors.New("needs at least one sibling field name")
+	}
+	return nil
 }

@@ -13,13 +13,13 @@ type benchUser struct {
 }
 
 func BenchmarkStructSuccess(b *testing.B) {
-	v := NewValidator()
+	v := MustNew()
 	u := benchUser{Name: "alice", Email: "a@b.com", Age: 30}
 	ctx := context.Background()
 	b.ReportAllocs()
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		vd := v.Struct(u)
+	for b.Loop() {
+		vd := v.MustStruct(u)
 		vd.Validate(ctx)
 		if vd.Fails() {
 			b.Fatal("should pass")
@@ -28,13 +28,13 @@ func BenchmarkStructSuccess(b *testing.B) {
 }
 
 func BenchmarkStructFailure(b *testing.B) {
-	v := NewValidator()
+	v := MustNew()
 	u := benchUser{Name: "1", Email: "nope", Age: 5}
 	ctx := context.Background()
 	b.ReportAllocs()
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		vd := v.Struct(u)
+	for b.Loop() {
+		vd := v.MustStruct(u)
 		vd.Validate(ctx)
 		if !vd.Fails() {
 			b.Fatal("should fail")
@@ -43,14 +43,14 @@ func BenchmarkStructFailure(b *testing.B) {
 }
 
 func BenchmarkMapSuccess(b *testing.B) {
-	v := NewValidator()
+	v := MustNew()
 	data := map[string]any{"Name": "alice", "Email": "a@b.com", "Age": 30}
 	sigs := map[string]string{"Name": "required && alpha", "Email": "required && email", "Age": "required && gte:18"}
 	ctx := context.Background()
 	b.ReportAllocs()
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		vd := v.Map(data, sigs)
+	for b.Loop() {
+		vd := v.MustMap(data, sigs)
 		vd.Validate(ctx)
 		if vd.Fails() {
 			b.Fatal("should pass")
@@ -59,12 +59,12 @@ func BenchmarkMapSuccess(b *testing.B) {
 }
 
 func BenchmarkVarSuccess(b *testing.B) {
-	v := NewValidator()
+	v := MustNew()
 	ctx := context.Background()
 	b.ReportAllocs()
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		vd := v.Var("a@b.com", "required && email")
+	for b.Loop() {
+		vd := v.MustValue("a@b.com", "required && email")
 		vd.Validate(ctx)
 		if vd.Fails() {
 			b.Fatal("should pass")
@@ -73,14 +73,14 @@ func BenchmarkVarSuccess(b *testing.B) {
 }
 
 func BenchmarkDiving(b *testing.B) {
-	v := NewValidator()
+	v := MustNew()
 	data := map[string]any{"tags": []any{"foo", "bar", "baz"}}
 	sigs := map[string]string{"tags": "required && dive && alpha"}
 	ctx := context.Background()
 	b.ReportAllocs()
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		vd := v.Map(data, sigs)
+	for b.Loop() {
+		vd := v.MustMap(data, sigs)
 		vd.Validate(ctx)
 		if vd.Fails() {
 			b.Fatal("should pass")
@@ -92,26 +92,26 @@ func BenchmarkCompileCold(b *testing.B) {
 	ctx := context.Background()
 	b.ReportAllocs()
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		v := NewValidator()
-		vd := v.Var("a@b.com", "required && (email || regex:\"^x\")")
+	for b.Loop() {
+		v := MustNew()
+		vd := v.MustValue("a@b.com", "required && (email || regex:\"^x\")")
 		vd.Validate(ctx)
 	}
 }
 
 func BenchmarkCompileCached(b *testing.B) {
-	v := NewValidator()
+	v := MustNew()
 	// warm exprCache so the timed loop measures cache hits
 	_, _ = v.compile("required && (email || regex:\"^x\")")
 	b.ReportAllocs()
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_, _ = v.compile("required && (email || regex:\"^x\")")
 	}
 }
 
 func BenchmarkParallelStruct(b *testing.B) {
-	v := NewValidator(WithParallel(8))
+	v := MustNew(WithParallel(8))
 	sigs := map[string]string{}
 	data := map[string]any{}
 	for i := 0; i < 20; i++ {
@@ -122,8 +122,8 @@ func BenchmarkParallelStruct(b *testing.B) {
 	ctx := context.Background()
 	b.ReportAllocs()
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		vd := v.Map(data, sigs)
+	for b.Loop() {
+		vd := v.MustMap(data, sigs)
 		vd.Validate(ctx)
 		if vd.Fails() {
 			b.Fatal("should pass")

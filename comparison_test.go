@@ -34,7 +34,7 @@ func TestIn(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := r.Passes(fakeField{val: rvOf(c.val), attrs: c.attrs}); got != c.want {
+			if got := r.Passes(&fakeField{val: rvOf(c.val), attrs: c.attrs}); got != c.want {
 				t.Errorf("Passes(val=%v, attrs=%v)=%v, want %v", c.val, c.attrs, got, c.want)
 			}
 		})
@@ -62,7 +62,7 @@ func TestNotIn(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := r.Passes(fakeField{val: rvOf(c.val), attrs: c.attrs}); got != c.want {
+			if got := r.Passes(&fakeField{val: rvOf(c.val), attrs: c.attrs}); got != c.want {
 				t.Errorf("Passes(val=%v, attrs=%v)=%v, want %v", c.val, c.attrs, got, c.want)
 			}
 		})
@@ -90,7 +90,7 @@ func TestEq(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := r.Passes(fakeField{val: rvOf(c.val), attrs: c.attrs}); got != c.want {
+			if got := r.Passes(&fakeField{val: rvOf(c.val), attrs: c.attrs}); got != c.want {
 				t.Errorf("Passes(val=%v, attrs=%v)=%v, want %v", c.val, c.attrs, got, c.want)
 			}
 		})
@@ -118,7 +118,7 @@ func TestNe(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := r.Passes(fakeField{val: rvOf(c.val), attrs: c.attrs}); got != c.want {
+			if got := r.Passes(&fakeField{val: rvOf(c.val), attrs: c.attrs}); got != c.want {
 				t.Errorf("Passes(val=%v, attrs=%v)=%v, want %v", c.val, c.attrs, got, c.want)
 			}
 		})
@@ -142,10 +142,10 @@ func TestComparisonNumericArgNormalization(t *testing.T) {
 		{"eq:5.0", "5", true},    // string "5" is not the literal "5.0"
 	}
 	for _, c := range cases {
-		vd := Var(c.val, c.rule)
+		vd := MustValue(c.val, c.rule)
 		vd.Validate(context.Background())
 		if vd.Fails() != c.fails {
-			t.Errorf("Var(%v, %q): fails=%v want %v", c.val, c.rule, vd.Fails(), c.fails)
+			t.Errorf("MustValue(%v, %q): fails=%v want %v", c.val, c.rule, vd.Fails(), c.fails)
 		}
 	}
 }
@@ -156,27 +156,27 @@ func TestComparisonIntegerPrecision(t *testing.T) {
 	ctx := context.Background()
 	const boundary = int64(9007199254740992) // 2^53
 
-	eq := Var(boundary, "eq:9007199254740993")
+	eq := MustValue(boundary, "eq:9007199254740993")
 	eq.Validate(ctx)
 	if !eq.Fails() {
 		t.Error("eq must not match a distinct integer one ulp away above 2^53")
 	}
-	ne := Var(boundary, "ne:9007199254740993")
+	ne := MustValue(boundary, "ne:9007199254740993")
 	ne.Validate(ctx)
 	if ne.Fails() {
 		t.Error("ne of a distinct >2^53 integer must pass")
 	}
-	ni := Var(boundary, "not_in:9007199254740993")
+	ni := MustValue(boundary, "not_in:9007199254740993")
 	ni.Validate(ctx)
 	if ni.Fails() {
 		t.Error("not_in must not block a distinct >2^53 integer")
 	}
-	hit := Var(boundary+1, "eq:9007199254740993")
+	hit := MustValue(boundary+1, "eq:9007199254740993")
 	hit.Validate(ctx)
 	if hit.Fails() {
 		t.Error("eq of the exact >2^53 integer must match")
 	}
-	u := Var(uint64(18446744073709551615), "eq:18446744073709551614")
+	u := MustValue(uint64(18446744073709551615), "eq:18446744073709551614")
 	u.Validate(ctx)
 	if !u.Fails() {
 		t.Error("uint64 eq must compare exactly at MaxUint64")
@@ -187,17 +187,17 @@ func TestComparisonIntegerPrecision(t *testing.T) {
 // to conv.ToString: eq:5s must accept time.Duration(5s) and not_in must block it.
 func TestComparisonNamedStringerType(t *testing.T) {
 	d := 5 * time.Second
-	eq := Var(d, "eq:5s")
+	eq := MustValue(d, "eq:5s")
 	eq.Validate(context.Background())
 	if eq.Fails() {
 		t.Errorf("eq:5s must match a 5s Duration via its String() form, got %v", eq.Errors().All())
 	}
-	ni := Var(d, "not_in:5s,10s")
+	ni := MustValue(d, "not_in:5s,10s")
 	ni.Validate(context.Background())
 	if !ni.Fails() {
 		t.Error("not_in:5s must block a 5s Duration — the Stringer form is the canonical rendering")
 	}
-	ct := Var(d, "contains:5s")
+	ct := MustValue(d, "contains:5s")
 	ct.Validate(context.Background())
 	if ct.Fails() {
 		t.Error("contains sees the same String() rendering")
@@ -222,7 +222,7 @@ func TestCaseInsensitiveComparisons(t *testing.T) {
 		{&neIgnoreCaseRule{}, "no", []string{"yes"}, true},
 	}
 	for _, c := range cases {
-		if got := c.r.Passes(fakeField{val: reflect.ValueOf(c.val), attrs: c.attrs}); got != c.want {
+		if got := c.r.Passes(&fakeField{val: reflect.ValueOf(c.val), attrs: c.attrs}); got != c.want {
 			t.Errorf("%s(%v vs %v)=%v want %v", c.r.Signature(), c.val, c.attrs, got, c.want)
 		}
 	}

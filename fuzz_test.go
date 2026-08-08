@@ -31,7 +31,7 @@ func FuzzParse(f *testing.F) {
 		f.Add(s)
 	}
 
-	permissive := func(sig string) (Rule, ErrorRule, bool) {
+	permissive := func(sig string) (Rule, FallibleRule, bool) {
 		return passRule{sig: sig, pass: true}, nil, true
 	}
 

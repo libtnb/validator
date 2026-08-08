@@ -1,14 +1,16 @@
 package validator
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"encoding/json/jsontext"
 	"errors"
+	"fmt"
 	"io"
 	"net/url"
 	"reflect"
 	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 )
@@ -19,14 +21,12 @@ type Validator struct {
 	exprCache *cowCache[*compiled]
 	diveCache *cowCache[diveSplit]
 	typeCache sync.Map
-	// rules-map plan caches (see cache.go): L1 by map pointer, L2 by content, Var by expression.
+	// rules-map plan caches (see cache.go): L1 by map pointer, L2 by content, Value by expression.
 	rulesPlans     sync.Map
 	rulesPlanCount atomic.Int64
 	contentPlans   *cowCache[*mapPlan]
 	varPlans       *cowCache[*mapPlan]
-	// gen counts registry changes; plan caches recheck it so a plan built concurrently with Register* is never published stale.
-	gen     atomic.Uint64
-	builtin bool
+	builtin        bool
 
 	tagName       string
 	tagNameFunc   TagNameFunc
@@ -41,138 +41,180 @@ type Validator struct {
 	parallel               int
 }
 
-// NewValidator creates a Validator, registering built-in rules unless WithoutBuiltinRules is given.
-func NewValidator(options ...Option) *Validator {
+// New creates an immutable Validator.
+func New(options ...Option) (*Validator, error) {
+	cfg := config{builtin: true, tagName: "validate"}
+	for i, option := range options {
+		if option == nil {
+			return nil, fmt.Errorf("%w: option %d is nil", ErrInvalidOption, i)
+		}
+		if err := option(&cfg); err != nil {
+			return nil, err
+		}
+	}
+
 	v := &Validator{
-		registry:     newRegistry(),
-		exprCache:    newCowCache[*compiled](),
-		diveCache:    newCowCache[diveSplit](),
-		contentPlans: newCowCache[*mapPlan](),
-		varPlans:     newCowCache[*mapPlan](),
-		builtin:      true,
-		tagName:      "validate",
+		registry:               newRegistry(),
+		exprCache:              newCowCache[*compiled](),
+		diveCache:              newCowCache[diveSplit](),
+		contentPlans:           newCowCache[*mapPlan](),
+		varPlans:               newCowCache[*mapPlan](),
+		builtin:                cfg.builtin,
+		tagName:                cfg.tagName,
+		tagNameFunc:            cfg.tagNameFunc,
+		transformFunc:          cfg.transformFunc,
+		attributes:             cfg.attributes,
+		messages:               cfg.messages,
+		translation:            cfg.translation,
+		translatorFn:           cfg.translatorFn,
+		strictRequired:         cfg.strictRequired,
+		privateFieldValidation: cfg.privateFieldValidation,
+		parallel:               cfg.parallel,
 	}
-
-	for _, o := range options {
-		o(v)
-	}
-
 	if v.builtin {
-		v.registerBuiltins()
+		if err := v.registerBuiltins(); err != nil {
+			return nil, err
+		}
 	}
+	for _, rule := range cfg.rules {
+		if err := v.registry.addRule(rule); err != nil {
+			return nil, err
+		}
+	}
+	for _, rule := range cfg.fallibleRules {
+		if err := v.registry.addFallibleRule(rule); err != nil {
+			return nil, err
+		}
+	}
+	for _, filter := range cfg.filters {
+		if err := v.registry.addFilter(filter); err != nil {
+			return nil, err
+		}
+	}
+	return v, nil
+}
 
+// MustNew is New with panic-on-error semantics.
+func MustNew(options ...Option) *Validator {
+	v, err := New(options...)
+	if err != nil {
+		panic(err)
+	}
 	return v
 }
 
-// RegisterRule registers a custom rule and invalidates caches so later validations
-// pick it up; register before constructing the validations that use it. An unusable
-// signature (blank, DSL syntax, reserved "dive") panics, like http.ServeMux.Handle.
-func (v *Validator) RegisterRule(rule Rule) {
-	validateSignature("rule", rule.Signature())
-	v.registry.addRule(rule)
-	v.invalidateCaches()
-}
-
-func (v *Validator) RegisterErrorRule(rule ErrorRule) {
-	validateSignature("rule", rule.Signature())
-	v.registry.addErrorRule(rule)
-	v.invalidateCaches()
-}
-
-func (v *Validator) RegisterFilter(f Filter) {
-	validateSignature("filter", f.Signature())
-	v.registry.addFilter(f)
-	v.invalidateCaches()
-}
-
-// RegisterFunc registers a rule from a plain function.
-func (v *Validator) RegisterFunc(signature string, fn func(Field) bool, message string) {
-	validateSignature("rule", signature)
-	v.registry.addRule(funcRule{sig: signature, fn: fn, msg: message})
-	v.invalidateCaches()
-}
-
-// RegisterStringFunc registers a string rule with the built-in conventions
-// pre-applied: empty values pass (omitempty) and the value arrives rendered as
-// a string, so fn only holds the actual check.
-func (v *Validator) RegisterStringFunc(signature string, fn func(value string, args ...string) bool, message string) {
-	v.RegisterFunc(signature, func(f Field) bool {
-		rv := f.Val()
-		if isEmptyV(rv) {
-			return true
-		}
-		return fn(valString(rv), f.Attrs()...)
-	}, message)
-}
-
-// CheckRules eagerly compiles every rule expression reachable from data's
-// struct type (nested and embedded fields included) and reports all bad tags —
-// unknown rules, DSL syntax errors, bad static args — as one joined error.
-// Call it from a test or at startup to catch tag typos before request time.
-func (v *Validator) CheckRules(data any) error {
-	t := reflect.TypeOf(data)
-	if t != nil {
-		t = derefType(t)
+// Check eagerly compiles every rule expression reachable from T and reports
+// all invalid tags as one joined error.
+func (v *Validator) Check[T any]() error {
+	t, err := validationStructType[T]("Check")
+	if err != nil {
+		return err
 	}
-	if t == nil || t.Kind() != reflect.Struct {
-		return errors.New("validator: CheckRules requires a struct or struct pointer")
+	return v.CheckType(t)
+}
+
+// CheckType is the reflection-oriented form of Check for schema generators.
+func (v *Validator) CheckType(t reflect.Type) error {
+	if t == nil {
+		return errors.New("validator: CheckType requires a struct type")
+	}
+	t = derefType(t)
+	if t.Kind() != reflect.Struct {
+		return errors.New("validator: CheckType requires a struct type")
 	}
 	var errs []error
 	for _, cf := range v.getStructPlan(t).execPlan {
-		if cf.buildErr != "" {
-			errs = append(errs, errors.New(cf.name+": "+cf.buildErr))
+		if cf.buildErr != nil {
+			errs = append(errs, &RulesError{Field: cf.name, Err: cf.buildErr})
 		}
 	}
 	return errors.Join(errs...)
 }
 
-// Any validates a map, a struct (tags are read), or a scalar.
-func (v *Validator) Any(data any) Validation {
+// Struct prepares a struct-tag validation.
+func (v *Validator) Struct(data any) (*Validation, error) {
 	vd := newValidation(v, nil)
 	v.attachSource(vd, data)
+	if vd.ssPlan == nil {
+		return nil, fmt.Errorf("%w: Struct requires a struct value", ErrInvalidInput)
+	}
+	if err := compiledFieldsError(vd.ssPlan.execPlan); err != nil {
+		return nil, err
+	}
 	applyStructTags(vd)
-	return vd
+	return vd, nil
 }
 
-// Struct validates a struct using its tags plus any added rules.
-func (v *Validator) Struct(data any) Validation {
-	vd := newValidation(v, nil)
-	v.attachSource(vd, data)
-	applyStructTags(vd)
-	return vd
+// MustStruct is Struct with panic-on-error semantics.
+func (v *Validator) MustStruct(data any) *Validation {
+	validation, err := v.Struct(data)
+	if err != nil {
+		panic(err)
+	}
+	return validation
 }
 
-// Valid reports whether data passes its struct-tag rules on the allocation-free
-// fast path; data carrying no rules is vacuously valid. Use Struct when you need
-// error details, Bind, or to add rules.
-func (v *Validator) Valid(data any) bool {
-	vd := validationPool.Get().(*validation)
+// Valid reports whether data passes its struct-tag rules. Rule execution errors
+// are returned separately from an invalid verdict.
+func (v *Validator) Valid(ctx context.Context, data any) (bool, error) {
+	if ctx == nil {
+		return false, ErrNilContext
+	}
+	vd := validationPool.Get().(*Validation)
 	vd.validator = v
 	v.attachSource(vd, data)
-	applyStructTags(vd)
-	var ok bool
-	if v.parallel > 0 {
-		vd.errors.v = v
-		vd.Validate(context.Background())
-		ok = !vd.Fails()
-	} else {
-		ok = vd.validFast(context.Background())
+	if vd.ssPlan == nil {
+		vd.reset()
+		validationPool.Put(vd)
+		return false, fmt.Errorf("%w: Valid requires a struct value", ErrInvalidInput)
 	}
+	if err := compiledFieldsError(vd.ssPlan.execPlan); err != nil {
+		vd.reset()
+		validationPool.Put(vd)
+		return false, err
+	}
+	applyStructTags(vd)
+	ok, err := vd.validFast(ctx)
 	vd.reset()
 	validationPool.Put(vd)
-	return ok
+	return ok, err
 }
 
-// Map validates a map against the given field->rule expressions.
-func (v *Validator) Map(data map[string]any, rules map[string]string) Validation {
-	vd := newValidation(v, mapSource{m: data})
-	applyRules(vd, rules)
-	return vd
+// Map prepares a Validation for any map type and explicit field expressions.
+// Non-string keys are rendered deterministically.
+func (v *Validator) Map[M ~map[K]V, K comparable, V any](
+	data M,
+	rules map[string]string,
+) (*Validation, error) {
+	converted, ok := asStringMap(data)
+	if !ok {
+		return nil, fmt.Errorf("%w: Map requires a map value", ErrInvalidInput)
+	}
+	vd := newValidation(v, mapSource{m: converted})
+	if err := applyRules(vd, rules); err != nil {
+		return nil, err
+	}
+	return vd, nil
 }
 
-// JSON decodes and validates a JSON object; a decode error or non-object top-level value is reported as a validation error.
-func (v *Validator) JSON(data string, rules map[string]string) Validation {
-	dec := json.NewDecoder(strings.NewReader(data))
+// MustMap is Map with panic-on-error semantics.
+func (v *Validator) MustMap[M ~map[K]V, K comparable, V any](data M, rules map[string]string) *Validation {
+	validation, err := v.Map(data, rules)
+	if err != nil {
+		panic(err)
+	}
+	return validation
+}
+
+// JSON decodes one JSON object and prepares a Validation. It preserves integer
+// precision and rejects duplicate object names and invalid UTF-8.
+func (v *Validator) JSON[Bytes ~[]byte | ~string](
+	data Bytes,
+	rules map[string]string,
+) (*Validation, error) {
+	input := []byte(data)
+	validSyntax := jsontext.Value(input).IsValid()
+	dec := json.NewDecoder(bytes.NewReader(input))
 	dec.UseNumber()
 	var raw any
 	err := dec.Decode(&raw)
@@ -187,21 +229,32 @@ func (v *Validator) JSON(data string, rules map[string]string) Validation {
 	if m == nil {
 		m = map[string]any{}
 	}
-	vd := newValidation(v, mapSource{m: m})
-	applyRules(vd, rules)
 	switch {
-	case err != nil:
-		vd.decodeErr = "validator: invalid JSON input"
+	case !validSyntax || err != nil:
+		return nil, fmt.Errorf("%w: invalid JSON", ErrInvalidInput)
 	case trailing:
-		vd.decodeErr = "validator: invalid JSON input"
+		return nil, fmt.Errorf("%w: trailing JSON data", ErrInvalidInput)
 	case !isObject:
-		vd.decodeErr = "validator: JSON input is not an object"
+		return nil, fmt.Errorf("%w: JSON value is not an object", ErrInvalidInput)
 	}
-	return vd
+	vd := newValidation(v, mapSource{m: m})
+	if err := applyRules(vd, rules); err != nil {
+		return nil, err
+	}
+	return vd, nil
 }
 
-// URLValues validates form data, using the first value of each key.
-func (v *Validator) URLValues(data url.Values, rules map[string]string) Validation {
+// MustJSON is JSON with panic-on-error semantics.
+func (v *Validator) MustJSON[Bytes ~[]byte | ~string](data Bytes, rules map[string]string) *Validation {
+	validation, err := v.JSON(data, rules)
+	if err != nil {
+		panic(err)
+	}
+	return validation
+}
+
+// Values prepares a Validation from the first value of each form key.
+func (v *Validator) Values(data url.Values, rules map[string]string) (*Validation, error) {
 	m := make(map[string]any, len(data))
 	for k, vs := range data {
 		if len(vs) > 0 {
@@ -211,22 +264,55 @@ func (v *Validator) URLValues(data url.Values, rules map[string]string) Validati
 		}
 	}
 	vd := newValidation(v, mapSource{m: m})
-	applyRules(vd, rules)
-	return vd
+	if err := applyRules(vd, rules); err != nil {
+		return nil, err
+	}
+	return vd, nil
 }
 
-// Var validates a single value; the field is named "value" and cross-field rules are not meaningful.
-func (v *Validator) Var(value any, rule string) Validation {
+// MustValues is Values with panic-on-error semantics.
+func (v *Validator) MustValues(data url.Values, rules map[string]string) *Validation {
+	validation, err := v.Values(data, rules)
+	if err != nil {
+		panic(err)
+	}
+	return validation
+}
+
+// Value prepares a Validation for one value under the field name "value".
+func (v *Validator) Value(value any, rule string) (*Validation, error) {
 	vd := newValidation(v, nil)
 	attachVar(vd, value)
 	mp := v.varPlan(rule)
+	if err := compiledFieldsError(mp.plan); err != nil {
+		return nil, err
+	}
 	vd.rules = mp.rules
 	vd.rulesShared = true
 	vd.srcPlan = mp
-	return vd
+	return vd, nil
 }
 
-func (v *Validator) registerBuiltins() {
+// MustValue is Value with panic-on-error semantics.
+func (v *Validator) MustValue(value any, rule string) *Validation {
+	validation, err := v.Value(value, rule)
+	if err != nil {
+		panic(err)
+	}
+	return validation
+}
+
+type funcRule struct {
+	sig string
+	msg string
+	fn  func(*Field) bool
+}
+
+func (r funcRule) Signature() string    { return r.sig }
+func (r funcRule) Passes(f *Field) bool { return r.fn(f) }
+func (r funcRule) Message() string      { return r.msg }
+
+func (v *Validator) registerBuiltins() error {
 	for _, r := range Rules() {
 		// strictRequired swaps required-family rules for their strict variant.
 		if v.strictRequired {
@@ -234,59 +320,45 @@ func (v *Validator) registerBuiltins() {
 				r = sf.withStrict()
 			}
 		}
-		v.registry.addRule(r)
-	}
-	for _, r := range ErrorRules() {
-		v.registry.addErrorRule(r)
+		if err := v.registry.addRule(r); err != nil {
+			return err
+		}
 	}
 	for _, f := range Filters() {
-		v.registry.addFilter(f)
+		if err := v.registry.addFilter(f); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
-// invalidateCaches drops expression-derived caches after a registry change (they
-// hold programs bound to the old registry). The gen bump precedes the clears so an
-// in-flight plan build observes the change (see getStructPlan).
-func (v *Validator) invalidateCaches() {
-	v.gen.Add(1)
-	v.exprCache.clear()
-	v.diveCache.clear()
-	v.typeCache.Clear()
-	v.contentPlans.clear()
-	v.varPlans.clear()
-	v.rulesPlans.Clear()
-	v.rulesPlanCount.Store(0)
+func validationStructType[T any](operation string) (reflect.Type, error) {
+	t := reflect.TypeFor[T]()
+	if t.Kind() != reflect.Struct {
+		return nil, fmt.Errorf("validator: %s requires a non-pointer struct type", operation)
+	}
+	return t, nil
 }
 
-type funcRule struct {
-	sig string
-	msg string
-	fn  func(Field) bool
-}
-
-func (r funcRule) Signature() string   { return r.sig }
-func (r funcRule) Passes(f Field) bool { return r.fn(f) }
-func (r funcRule) Message() string     { return r.msg }
-
-// validateSignature panics on a signature the DSL could never invoke.
-func validateSignature(kind, sig string) {
+func validateSignature(kind, sig string) error {
 	if sig == "" {
-		panic("validator: " + kind + " signature must not be empty")
+		return fmt.Errorf("%w: %s signature is empty", ErrInvalidSignature, kind)
 	}
 	if sig == "dive" {
-		panic(`validator: "dive" is a reserved keyword and cannot be a ` + kind + " signature")
+		return fmt.Errorf("%w: %q is reserved", ErrInvalidSignature, sig)
 	}
 	for i := 0; i < len(sig); i++ {
 		c := sig[i]
 		ident := c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (i > 0 && c >= '0' && c <= '9')
 		if !ident {
-			panic("validator: invalid " + kind + " signature " + strconv.Quote(sig) + ": use letters, digits and '_', starting with a letter or '_'")
+			return fmt.Errorf("%w: invalid %s signature %s", ErrInvalidSignature, kind, strconv.Quote(sig))
 		}
 	}
+	return nil
 }
 
 // attachVar stores a single value inline (no source boxing, no rules map).
-func attachVar(vd *validation, value any) {
+func attachVar(vd *Validation, value any) {
 	vd.isVar = true
 	if value != nil {
 		vd.ssVal = reflect.ValueOf(value)
@@ -294,7 +366,7 @@ func attachVar(vd *validation, value any) {
 }
 
 // applyStructTags shares the type's cached rule map read-only; AddRules/RemoveRules copy-on-write before mutating.
-func applyStructTags(vd *validation) {
+func applyStructTags(vd *Validation) {
 	if vd.ssPlan != nil {
 		vd.rules = vd.ssPlan.rules
 		vd.rulesShared = true
@@ -304,14 +376,28 @@ func applyStructTags(vd *validation) {
 // applyRules attaches the precompiled plan for a caller rules map; the plan's rules
 // snapshot is shared read-only (AddRules/RemoveRules copy-on-write), so the caller's
 // map is never touched or retained.
-func applyRules(vd *validation, rules map[string]string) {
+func applyRules(vd *Validation, rules map[string]string) error {
 	if len(rules) == 0 {
-		return
+		return nil
 	}
 	mp := vd.validator.rulesPlan(rules)
+	if err := compiledFieldsError(mp.plan); err != nil {
+		return err
+	}
 	vd.rules = mp.rules
 	vd.rulesShared = true
 	vd.srcPlan = mp
+	return nil
+}
+
+func compiledFieldsError(fields []compiledField) error {
+	var errs []error
+	for _, field := range fields {
+		if field.buildErr != nil {
+			errs = append(errs, &RulesError{Field: field.name, Err: field.buildErr})
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func normalizeJSONNumbers(v any) any {

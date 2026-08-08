@@ -18,14 +18,14 @@ func TestDescribeRules(t *testing.T) {
 		Plain   string
 	}
 
-	fields, err := DescribeRules(User{})
+	fields, err := Describe[User]()
 	if err != nil {
 		t.Fatalf("DescribeRules: %v", err)
 	}
 
-	byName := map[string]FieldRules{}
-	for _, f := range fields {
-		byName[f.Name] = f
+	byName := map[string]*FieldRules{}
+	for i := range fields {
+		byName[fields[i].Name] = &fields[i]
 	}
 
 	name := byName["Name"]
@@ -70,7 +70,7 @@ func TestDescribeRules_UnknownRuleTolerated(t *testing.T) {
 		ID uint `validate:"required && exists:users,id"`
 	}
 
-	fields, err := DescribeRules(Req{})
+	fields, err := Describe[Req]()
 	if err != nil {
 		t.Fatalf("unknown rules must not fail introspection: %v", err)
 	}
@@ -80,7 +80,7 @@ func TestDescribeRules_UnknownRuleTolerated(t *testing.T) {
 }
 
 func TestDescribeRules_NonStruct(t *testing.T) {
-	if _, err := DescribeRules(42); err == nil {
+	if _, err := Describe[int](); err == nil {
 		t.Error("non-struct input should error")
 	}
 }

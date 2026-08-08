@@ -12,74 +12,88 @@ import (
 	"github.com/libtnb/validator/conv"
 )
 
-var fieldPool = sync.Pool{New: func() any { return &field{} }}
+var fieldPool = sync.Pool{New: func() any { return &Field{} }}
 
-func (vd *validation) evalField(name, expr string, ctx context.Context, dst []FieldError) []FieldError {
+func (vd *Validation) evalField(ctx context.Context, name, expr string, dst []FieldError) ([]FieldError, error) {
 	ds := vd.validator.splitDive(expr)
 	if ds.err != nil {
-		return append(dst, vd.diag(name, ds.err.Error()))
+		return dst, fmt.Errorf("validator: field %q: %w", name, ds.err)
 	}
 	if ds.nested {
-		return append(dst, vd.diag(name, "validator: multiple top-level 'dive' is not supported"))
+		return dst, fmt.Errorf("validator: field %q: multiple top-level dive", name)
 	}
 	var container, element *compiled
 	if ds.container != "" {
 		c, err := vd.validator.compile(ds.container)
 		if err != nil {
-			return append(dst, vd.diag(name, err.Error()))
+			return dst, fmt.Errorf("validator: field %q: %w", name, err)
 		}
 		container = c
 	}
 	if ds.hasDive && ds.element != "" {
 		e, err := vd.validator.compile(ds.element)
 		if err != nil {
-			return append(dst, vd.diag(name, err.Error()))
+			return dst, fmt.Errorf("validator: field %q: %w", name, err)
 		}
 		if e.sometimes {
-			return append(dst, vd.diag(name, errSometimesInDive))
+			return dst, fmt.Errorf("validator: field %q: %s", name, errSometimesInDive)
 		}
 		element = e
 	}
-	return vd.evalCompiledField(compiledField{name: name, container: container, element: element, hasDive: ds.hasDive}, ctx, dst)
+	return vd.evalCompiledField(
+		ctx,
+		compiledField{
+			name:      name,
+			container: container,
+			element:   element,
+			hasDive:   ds.hasDive,
+		},
+		dst,
+	)
 }
 
-// Recover dive reflection panics; otherwise fatal under WithParallel.
-func (vd *validation) evalCompiledField(cf compiledField, ctx context.Context, dst []FieldError) (out []FieldError) {
+// Reflection panics become execution errors.
+func (vd *Validation) evalCompiledField(
+	ctx context.Context,
+	cf compiledField,
+	dst []FieldError,
+) (out []FieldError, err error) {
+	if err := context.Cause(ctx); err != nil {
+		return dst, err
+	}
 	out = dst
 	defer func() {
-		if r := recover(); r != nil {
+		if recovered := recover(); recovered != nil {
 			// conv.ToString, not %v: a panic value whose String() panics must not re-escape recovery
-			out = append(dst, vd.diag(cf.name, "validator: field evaluation panicked: "+conv.ToString(r)))
+			err = &RuleError{Field: cf.name, Err: fmt.Errorf("%w: %s", ErrRulePanic, conv.ToString(recovered))}
 		}
 	}()
-	if cf.buildErr != "" {
-		return append(dst, vd.diag(cf.name, cf.buildErr))
+	if cf.buildErr != nil {
+		return dst, &RulesError{Field: cf.name, Err: cf.buildErr}
 	}
 	if vd.sometimesAbsent(cf) {
-		return out
+		return out, nil
 	}
 	if cf.container != nil {
-		var cval reflect.Value
+		cval := vd.containerValue(cf)
 		if cf.hasDive {
 			cval = vd.rawValue(cf)
-		} else {
-			cval = vd.containerValue(cf)
 		}
-		out = vd.evalCompiled(cf.name, cf.name, cf.container, cval, ctx, out)
+		out, err = vd.evalCompiled(ctx, cf.name, cf.name, cf.container, cval, out)
+		if err != nil {
+			return out, err
+		}
 	}
 	if cf.hasDive && cf.element != nil {
 		// dive uses the raw collection; filtering would stringify it.
-		out = vd.evalDive(cf.name, cf.element, vd.rawValue(cf), ctx, out)
+		out, err = vd.evalDive(ctx, cf.name, cf.element, vd.rawValue(cf), out)
 	}
-	return out
+	return out, err
 }
 
-// sometimesAbsent: a "sometimes" marker on the container expression skips the
-// whole field (value and dive rules) when the field is absent. For a struct
-// source fields always exist, so absence is a nil pointer; for map/var sources
-// absence is a MISSING KEY — a present key holding an explicit null stays
-// present, flows into required and fails there (PATCH semantics).
-func (vd *validation) sometimesAbsent(cf compiledField) bool {
+// sometimes distinguishes a missing map key from an explicit null. Struct
+// inputs cannot preserve that distinction, so nil pointers count as absent.
+func (vd *Validation) sometimesAbsent(cf compiledField) bool {
 	if cf.container == nil || !cf.container.sometimes {
 		return false
 	}
@@ -90,7 +104,7 @@ func (vd *validation) sometimesAbsent(cf compiledField) bool {
 	return !found
 }
 
-func (vd *validation) rawValue(cf compiledField) reflect.Value {
+func (vd *Validation) rawValue(cf compiledField) reflect.Value {
 	if cf.index != nil {
 		return vd.valueByIndex(cf.index)
 	}
@@ -98,7 +112,7 @@ func (vd *validation) rawValue(cf compiledField) reflect.Value {
 	return v
 }
 
-func (vd *validation) containerValue(cf compiledField) reflect.Value {
+func (vd *Validation) containerValue(cf compiledField) reflect.Value {
 	if vd.filtered != nil {
 		if fv, ok := vd.filtered[cf.name]; ok {
 			return toValue(fv)
@@ -107,7 +121,7 @@ func (vd *validation) containerValue(cf compiledField) reflect.Value {
 	return vd.rawValue(cf)
 }
 
-func (vd *validation) valueByIndex(index []int) reflect.Value {
+func (vd *Validation) valueByIndex(index []int) reflect.Value {
 	fv := vd.ssVal
 	for _, idx := range index {
 		sv, ok := derefToStruct(fv)
@@ -119,33 +133,46 @@ func (vd *validation) valueByIndex(index []int) reflect.Value {
 	return getValueV(fv)
 }
 
-func (vd *validation) diag(field, msg string) FieldError {
+func (vd *Validation) diag(field, msg string) FieldError {
 	return FieldError{Field: field, Message: msg}
 }
 
-// Recover rule/hook panics; otherwise fatal under WithParallel.
+// Rule panics become execution errors.
 // name is the error key; scope is the cross-field identity (the container name
 // for dive elements) so sibling resolution matches the fast path exactly.
-func (vd *validation) evalCompiled(name, scope string, compiled *compiled, val reflect.Value, ctx context.Context, dst []FieldError) (out []FieldError) {
-	f := fieldPool.Get().(*field)
+func (vd *Validation) evalCompiled(
+	ctx context.Context,
+	name string,
+	scope string,
+	compiled *compiled,
+	val reflect.Value,
+	dst []FieldError,
+) (out []FieldError, err error) {
+	f := fieldPool.Get().(*Field)
 	f.name, f.scope, f.rv, f.ctx, f.vd = name, scope, val, ctx, vd
 	out = dst
 	defer func() {
-		*f = field{}
+		*f = Field{}
 		fieldPool.Put(f)
-		if r := recover(); r != nil {
+		if recovered := recover(); recovered != nil {
 			// conv.ToString, not %v: see evalCompiledField
-			out = append(dst, vd.diag(name, "validator: rule panicked: "+conv.ToString(r)))
+			err = &RuleError{Field: name, Err: fmt.Errorf("%w: %s", ErrRulePanic, conv.ToString(recovered))}
 		}
 	}()
-	_, out = compiled.Diag(f, dst)
-	return out
+	_, out, err = compiled.Diag(f, dst)
+	return out, err
 }
 
-func (vd *validation) evalDive(name string, element *compiled, val reflect.Value, ctx context.Context, dst []FieldError) []FieldError {
+func (vd *Validation) evalDive(
+	ctx context.Context,
+	name string,
+	element *compiled,
+	val reflect.Value,
+	dst []FieldError,
+) ([]FieldError, error) {
 	// val is pre-unwrapped; invalid Value means nil container.
 	if !val.IsValid() {
-		return dst
+		return dst, nil
 	}
 	switch val.Kind() {
 	case reflect.Slice, reflect.Array:
@@ -153,25 +180,39 @@ func (vd *validation) evalDive(name string, element *compiled, val reflect.Value
 			// unwrap so rules see the pointee, matching every source
 			ev := unwrapValue(val.Index(i))
 			// fast probe first: the "field[i]" key is built only for a failing
-			// element (rules must be deterministic; ErrorRules idempotent).
-			if vd.exprPasses(name, element, ev, ctx) {
+			// element; custom rules must be deterministic.
+			passes, err := vd.exprPasses(ctx, name, element, ev)
+			if err != nil {
+				return dst, err
+			}
+			if passes {
 				continue
 			}
-			dst = vd.evalCompiled(name+"["+strconv.Itoa(i)+"]", name, element, ev, ctx, dst)
+			dst, err = vd.evalCompiled(ctx, name+"["+strconv.Itoa(i)+"]", name, element, ev, dst)
+			if err != nil {
+				return dst, err
+			}
 		}
 	case reflect.Map:
-		dst = vd.evalDiveMap(name, element, val, ctx, dst)
+		return vd.evalDiveMap(ctx, name, element, val, dst)
 	default:
 		// non-collection: fail-closed if non-empty, else skip (omitempty)
 		if !IsEmptyValue(val) {
 			dst = append(dst, vd.diag(name, "validator: dive requires an array or map value"))
 		}
 	}
-	return dst
+	return dst, nil
 }
 
-// MapRange, not MapIndex: a NaN key panics .Interface(). Colliding keys get a type/ordinal suffix to stay unique.
-func (vd *validation) evalDiveMap(name string, element *compiled, rv reflect.Value, ctx context.Context, dst []FieldError) []FieldError {
+// MapRange avoids MapIndex with NaN keys. Type and ordinal suffixes keep
+// rendered key collisions distinct.
+func (vd *Validation) evalDiveMap(
+	ctx context.Context,
+	name string,
+	element *compiled,
+	rv reflect.Value,
+	dst []FieldError,
+) ([]FieldError, error) {
 	type mentry struct {
 		mapKeyOrder
 		val reflect.Value
@@ -183,7 +224,11 @@ func (vd *validation) evalDiveMap(name string, element *compiled, rv reflect.Val
 		k, v := it.Key(), it.Value()
 		// unwrap so rules see the pointee, matching every source
 		ev := unwrapValue(v)
-		if vd.exprPasses(name, element, ev, ctx) {
+		passes, err := vd.exprPasses(ctx, name, element, ev)
+		if err != nil {
+			return dst, err
+		}
+		if passes {
 			continue
 		}
 		// value may be cyclic: use cycle-bounded conv.ToString
@@ -198,7 +243,7 @@ func (vd *validation) evalDiveMap(name string, element *compiled, rv reflect.Val
 		})
 	}
 	if len(failed) == 0 {
-		return dst
+		return dst, nil
 	}
 	formatCount := make(map[string]int, len(failed))
 	for i := range failed {
@@ -217,25 +262,29 @@ func (vd *validation) evalDiveMap(name string, element *compiled, rv reflect.Val
 			label = fmt.Sprintf("%s#%d", display, n)
 		}
 		used[label] = true
-		dst = vd.evalCompiled(name+"["+label+"]", name, element, e.val, ctx, dst)
+		var err error
+		dst, err = vd.evalCompiled(ctx, name+"["+label+"]", name, element, e.val, dst)
+		if err != nil {
+			return dst, err
+		}
 	}
-	return dst
+	return dst, nil
 }
 
-// validFast is Valid's serial short-circuiting pass/fail path; any rule/dive panic fails closed.
-func (vd *validation) validFast(ctx context.Context) (ok bool) {
+func (vd *Validation) validFast(ctx context.Context) (ok bool, err error) {
 	if ctx == nil {
-		ctx = context.Background()
+		return false, ErrNilContext
 	}
-	if vd.decodeErr != "" {
-		return false
+	if err := context.Cause(ctx); err != nil {
+		return false, err
 	}
 	// Fail closed on any rule/dive panic. Valid() builds from struct tags only
 	// (applyStructTags sets rules, never filters), so the fast path carries no
 	// filters.
 	defer func() {
-		if r := recover(); r != nil {
+		if recovered := recover(); recovered != nil {
 			ok = false
+			err = &RuleError{Err: fmt.Errorf("%w: %s", ErrRulePanic, conv.ToString(recovered))}
 		}
 	}()
 	if vd.rulesShared {
@@ -248,11 +297,12 @@ func (vd *validation) validFast(ctx context.Context) (ok bool) {
 		}
 		if plan != nil {
 			for i := range plan {
-				if !vd.fieldPasses(plan[i], ctx) {
-					return false
+				passed, err := vd.fieldPasses(ctx, plan[i])
+				if err != nil || !passed {
+					return false, err
 				}
 			}
-			return true
+			return true, nil
 		}
 	}
 	// slow path (AddRules-mutated): split+compile per field on demand
@@ -260,67 +310,85 @@ func (vd *validation) validFast(ctx context.Context) (ok bool) {
 		if strings.TrimSpace(expr) == "" {
 			continue
 		}
-		if !vd.fieldPasses(vd.validator.buildCompiledField(name, expr), ctx) {
-			return false
+		passed, err := vd.fieldPasses(ctx, vd.validator.buildCompiledField(name, expr))
+		if err != nil || !passed {
+			return false, err
 		}
 	}
-	return true
+	return true, nil
 }
 
-func (vd *validation) fieldPasses(cf compiledField, ctx context.Context) bool {
-	if cf.buildErr != "" {
-		return false
+func (vd *Validation) fieldPasses(ctx context.Context, cf compiledField) (bool, error) {
+	if cf.buildErr != nil {
+		return false, &RulesError{Field: cf.name, Err: cf.buildErr}
 	}
 	if vd.sometimesAbsent(cf) {
-		return true
+		return true, nil
 	}
 	if cf.container != nil {
-		var cval reflect.Value
+		cval := vd.containerValue(cf)
 		if cf.hasDive {
 			cval = vd.rawValue(cf)
-		} else {
-			cval = vd.containerValue(cf)
 		}
-		if !vd.exprPasses(cf.name, cf.container, cval, ctx) {
-			return false
+		passed, err := vd.exprPasses(ctx, cf.name, cf.container, cval)
+		if err != nil || !passed {
+			return false, err
 		}
 	}
 	if cf.hasDive && cf.element != nil {
-		if !vd.divePasses(cf.name, cf.element, vd.rawValue(cf), ctx) {
-			return false
+		passed, err := vd.divePasses(ctx, cf.name, cf.element, vd.rawValue(cf))
+		if err != nil || !passed {
+			return false, err
 		}
 	}
-	return true
+	return true, nil
 }
 
-func (vd *validation) exprPasses(name string, compiled *compiled, val reflect.Value, ctx context.Context) bool {
-	f := fieldPool.Get().(*field)
+func (vd *Validation) exprPasses(
+	ctx context.Context,
+	name string,
+	compiled *compiled,
+	val reflect.Value,
+) (ok bool, err error) {
+	f := fieldPool.Get().(*Field)
 	f.name, f.scope, f.rv, f.ctx, f.vd = name, name, val, ctx, vd
-	ok := compiled.Fast(f)
-	*f = field{}
-	fieldPool.Put(f)
-	return ok
+	defer func() {
+		*f = Field{}
+		fieldPool.Put(f)
+		if recovered := recover(); recovered != nil {
+			ok = false
+			err = &RuleError{Field: name, Err: fmt.Errorf("%w: %s", ErrRulePanic, conv.ToString(recovered))}
+		}
+	}()
+	return compiled.Fast(f)
 }
 
-func (vd *validation) divePasses(name string, element *compiled, val reflect.Value, ctx context.Context) bool {
+func (vd *Validation) divePasses(
+	ctx context.Context,
+	name string,
+	element *compiled,
+	val reflect.Value,
+) (bool, error) {
 	if !val.IsValid() {
-		return true
+		return true, nil
 	}
 	switch val.Kind() {
 	case reflect.Slice, reflect.Array:
 		for i := 0; i < val.Len(); i++ {
-			if !vd.exprPasses(name, element, unwrapValue(val.Index(i)), ctx) {
-				return false
+			passed, err := vd.exprPasses(ctx, name, element, unwrapValue(val.Index(i)))
+			if err != nil || !passed {
+				return false, err
 			}
 		}
 	case reflect.Map:
 		for it := val.MapRange(); it.Next(); {
-			if !vd.exprPasses(name, element, unwrapValue(it.Value()), ctx) {
-				return false
+			passed, err := vd.exprPasses(ctx, name, element, unwrapValue(it.Value()))
+			if err != nil || !passed {
+				return false, err
 			}
 		}
 	default:
-		return IsEmptyValue(val)
+		return IsEmptyValue(val), nil
 	}
-	return true
+	return true, nil
 }

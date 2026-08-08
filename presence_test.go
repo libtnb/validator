@@ -22,7 +22,7 @@ func TestRequiredDefault(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := r.Passes(fakeField{val: rvOf(tt.val)}); got != tt.want {
+			if got := r.Passes(&fakeField{val: rvOf(tt.val)}); got != tt.want {
 				t.Errorf("Passes(%#v)=%v, want %v", tt.val, got, tt.want)
 			}
 		})
@@ -45,7 +45,7 @@ func TestRequiredStrict(t *testing.T) {
 		{[]int{}, false},
 	}
 	for _, tt := range tests {
-		if got := r.Passes(fakeField{val: rvOf(tt.val)}); got != tt.want {
+		if got := r.Passes(&fakeField{val: rvOf(tt.val)}); got != tt.want {
 			t.Errorf("strict Passes(%#v)=%v, want %v", tt.val, got, tt.want)
 		}
 	}
@@ -71,7 +71,7 @@ func TestFilled(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := r.Passes(fakeField{val: rvOf(tt.val)}); got != tt.want {
+			if got := r.Passes(&fakeField{val: rvOf(tt.val)}); got != tt.want {
 				t.Errorf("Passes(%#v)=%v, want %v", tt.val, got, tt.want)
 			}
 		})
@@ -98,7 +98,7 @@ func TestNotBlank(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := r.Passes(fakeField{val: rvOf(tt.val)}); got != tt.want {
+			if got := r.Passes(&fakeField{val: rvOf(tt.val)}); got != tt.want {
 				t.Errorf("Passes(%#v)=%v, want %v", tt.val, got, tt.want)
 			}
 		})

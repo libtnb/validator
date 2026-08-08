@@ -1,6 +1,6 @@
 module github.com/libtnb/validator/contrib/gormrules
 
-go 1.25.0
+go 1.27rc2
 
 require (
 	github.com/libtnb/sqlite v1.2.0

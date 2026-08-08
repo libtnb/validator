@@ -1,59 +1,67 @@
 package validator
 
 import (
-	"sync"
+	"fmt"
 )
 
 type registry struct {
-	mu       sync.RWMutex
 	rules    map[string]Rule
-	errRules map[string]ErrorRule
+	fallible map[string]FallibleRule
 	filters  map[string]Filter
+}
+
+func (r *registry) addRule(rule Rule) error {
+	signature := rule.Signature()
+	if _, exists := r.rules[signature]; exists {
+		return fmt.Errorf("%w: %q", ErrDuplicateRule, signature)
+	}
+	if _, exists := r.fallible[signature]; exists {
+		return fmt.Errorf("%w: %q", ErrDuplicateRule, signature)
+	}
+	r.rules[signature] = rule
+	return nil
+}
+
+func (r *registry) addFallibleRule(rule FallibleRule) error {
+	signature := rule.Signature()
+	if _, exists := r.rules[signature]; exists {
+		return fmt.Errorf("%w: %q", ErrDuplicateRule, signature)
+	}
+	if _, exists := r.fallible[signature]; exists {
+		return fmt.Errorf("%w: %q", ErrDuplicateRule, signature)
+	}
+	r.fallible[signature] = rule
+	return nil
+}
+
+func (r *registry) addFilter(f Filter) error {
+	signature := f.Signature()
+	if _, exists := r.filters[signature]; exists {
+		return fmt.Errorf("%w: %q", ErrDuplicateFilter, signature)
+	}
+	r.filters[signature] = f
+	return nil
+}
+
+func (r *registry) rule(sig string) (Rule, bool) {
+	rule, ok := r.rules[sig]
+	return rule, ok
+}
+
+func (r *registry) fallibleRule(sig string) (FallibleRule, bool) {
+	rule, ok := r.fallible[sig]
+	return rule, ok
+}
+
+func (r *registry) filter(sig string) (Filter, bool) {
+	f, ok := r.filters[sig]
+	return f, ok
 }
 
 func newRegistry() *registry {
 	return &registry{
 		rules:    make(map[string]Rule),
-		errRules: make(map[string]ErrorRule),
+		fallible: make(map[string]FallibleRule),
 		filters:  make(map[string]Filter),
 	}
-}
-
-func (r *registry) addRule(rule Rule) {
-	r.mu.Lock()
-	r.rules[rule.Signature()] = rule
-	r.mu.Unlock()
-}
-
-func (r *registry) addErrorRule(rule ErrorRule) {
-	r.mu.Lock()
-	r.errRules[rule.Signature()] = rule
-	r.mu.Unlock()
-}
-
-func (r *registry) addFilter(f Filter) {
-	r.mu.Lock()
-	r.filters[f.Signature()] = f
-	r.mu.Unlock()
-}
-
-func (r *registry) rule(sig string) (Rule, bool) {
-	r.mu.RLock()
-	rule, ok := r.rules[sig]
-	r.mu.RUnlock()
-	return rule, ok
-}
-
-func (r *registry) errorRule(sig string) (ErrorRule, bool) {
-	r.mu.RLock()
-	rule, ok := r.errRules[sig]
-	r.mu.RUnlock()
-	return rule, ok
-}
-
-func (r *registry) filter(sig string) (Filter, bool) {
-	r.mu.RLock()
-	f, ok := r.filters[sig]
-	r.mu.RUnlock()
-	return f, ok
 }

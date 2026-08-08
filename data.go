@@ -9,21 +9,36 @@ import (
 )
 
 var (
-	errBindTarget       = errors.New("validator: Bind/SafeBind requires a non-nil pointer to a struct")
-	errNotValidated     = errors.New("validator: call Validate before SafeBind")
-	errValidationFailed = errors.New("validator: validation failed")
+	// ErrBindTarget reports an invalid Bind or ValidateAs destination.
+	ErrBindTarget = errors.New("validator: bind requires a non-nil pointer to a non-pointer struct")
+	// ErrBindConversion reports a field conversion failure.
+	ErrBindConversion = errors.New("validator: bind conversion failed")
+	// ErrValidationFailed marks a ValidateAs validation failure.
+	ErrValidationFailed = errors.New("validator: validation failed")
+	// ErrValidated reports a mutation attempted after validation.
+	ErrValidated = errors.New("validator: validation already ran")
 )
 
-func (vd *validation) bindInto(ptr any, filtered bool) error {
-	rv := reflect.ValueOf(ptr)
-	if rv.Kind() != reflect.Pointer || rv.IsNil() {
-		return errBindTarget
-	}
-	elem := rv.Elem()
-	if elem.Kind() != reflect.Struct {
-		return errBindTarget
-	}
-	plan := vd.validator.getStructPlan(elem.Type())
+// BindError identifies the field that could not be converted. Binding is
+// atomic, so the destination is unchanged when this error is returned.
+type BindError struct {
+	Field  string
+	Target reflect.Type
+	Value  any
+	Err    error
+}
+
+func (e *BindError) Error() string {
+	return "validator: bind field " + e.Field + " to " + e.Target.String() + ": " + e.Err.Error()
+}
+
+func (e *BindError) Unwrap() error { return e.Err }
+
+func (vd *Validation) bindInto(ptr reflect.Value, filtered bool) error {
+	target := ptr.Elem()
+	temp := reflect.New(target.Type()).Elem()
+	temp.Set(target)
+	plan := vd.validator.getStructPlan(target.Type())
 	// Bind never drops untagged fields.
 	for _, fp := range plan.entries {
 		if !fp.leaf {
@@ -35,23 +50,29 @@ func (vd *validation) bindInto(ptr any, filtered bool) error {
 		}
 		// convert into a detached temp first: a failed conversion must not leave
 		// freshly allocated intermediate pointers on the target
-		ft, ok := fieldTypeByIndex(elem.Type(), fp.index)
+		ft, ok := fieldTypeByIndex(temp.Type(), fp.index)
 		if !ok {
-			continue
+			return &BindError{Field: fp.name, Target: temp.Type(), Value: val, Err: ErrBindConversion}
 		}
 		tmp := reflect.New(ft).Elem()
-		if !vd.setReflect(tmp, val, 0) {
-			continue
+		wrote, err := vd.setReflect(tmp, val, 0)
+		if err != nil || !wrote {
+			if err == nil {
+				err = ErrBindConversion
+			}
+			return &BindError{Field: fp.name, Target: ft, Value: val, Err: err}
 		}
-		fv, ok := settableField(elem, fp.index)
-		if ok && fv.CanSet() {
-			fv.Set(tmp)
+		fv, ok := settableField(temp, fp.index)
+		if !ok || !fv.CanSet() {
+			return &BindError{Field: fp.name, Target: ft, Value: val, Err: ErrBindConversion}
 		}
+		fv.Set(tmp)
 	}
+	target.Set(temp)
 	return nil
 }
 
-func (vd *validation) bindValue(name string, filtered bool) (any, bool) {
+func (vd *Validation) bindValue(name string, filtered bool) (any, bool) {
 	if filtered {
 		rv, ok := vd.fieldValue(name)
 		return valToAny(rv), ok
@@ -60,102 +81,110 @@ func (vd *validation) bindValue(name string, filtered bool) (any, bool) {
 	return valToAny(rv), ok
 }
 
-// setReflect returns true iff a value was written; a failed conversion leaves the field intact.
-func (vd *validation) setReflect(fv reflect.Value, val any, depth int) bool {
+// setReflect reports whether a value was written and why conversion failed.
+func (vd *Validation) setReflect(fv reflect.Value, val any, depth int) (bool, error) {
 	if val == nil {
-		return false
+		switch fv.Kind() {
+		case reflect.Pointer, reflect.Slice, reflect.Map, reflect.Interface, reflect.Func, reflect.Chan:
+			fv.SetZero()
+			return true, nil
+		default:
+			return false, ErrBindConversion
+		}
 	}
 	if depth > maxDerefDepth {
 		// bounded against recursive pointer type (type P *P).
-		return false
+		return false, ErrBindConversion
 	}
 	rv := reflect.ValueOf(val)
 	ft := fv.Type()
 	if rv.Type().AssignableTo(ft) {
 		fv.Set(rv)
-		return true
+		return true, nil
 	}
 	if ft.Kind() == reflect.Pointer {
 		// commit the pointer only if the inner conversion succeeds.
 		nv := reflect.New(ft.Elem())
-		if !vd.setReflect(nv.Elem(), val, depth+1) {
-			return false
+		wrote, err := vd.setReflect(nv.Elem(), val, depth+1)
+		if err != nil || !wrote {
+			return false, err
 		}
 		fv.Set(nv)
-		return true
+		return true, nil
 	}
 	// time.Time via conv.ToTime, never a silent zero time.
 	if ft == timeType {
 		if t, err := conv.ToTime(val); err == nil {
 			fv.Set(reflect.ValueOf(t))
-			return true
+			return true, nil
 		}
-		return false
+		return false, ErrBindConversion
 	}
 	switch ft.Kind() {
 	case reflect.String:
 		fv.SetString(conv.ToString(val))
-		return true
+		return true, nil
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 		// skip on overflow rather than write a wrapped value.
 		if i, err := conv.ToInt(val); err == nil && !fv.OverflowInt(i) {
 			fv.SetInt(i)
-			return true
+			return true, nil
 		}
-		return false
+		return false, ErrBindConversion
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
 		// unsigned converter so uint64 above MaxInt64 is not rejected.
 		if u, err := conv.ToUint(val); err == nil && !fv.OverflowUint(u) {
 			fv.SetUint(u)
-			return true
+			return true, nil
 		}
-		return false
+		return false, ErrBindConversion
 	case reflect.Float32, reflect.Float64:
 		if f, err := conv.ToFloat(val); err == nil && !fv.OverflowFloat(f) {
 			fv.SetFloat(f)
-			return true
+			return true, nil
 		}
-		return false
+		return false, ErrBindConversion
 	case reflect.Bool:
 		if b, err := conv.ToBool(val); err == nil {
 			fv.SetBool(b)
-			return true
+			return true, nil
 		}
-		return false
+		return false, ErrBindConversion
 	case reflect.Struct:
 		return vd.setStruct(fv, val, depth+1)
 	case reflect.Slice:
-		// positional convert: a failed/nil element keeps the zero, not shifting later indices.
 		if rv.Kind() != reflect.Slice && rv.Kind() != reflect.Array {
 			// non-slice source may still whole-value convert (string -> []byte).
 			if rv.Type().ConvertibleTo(ft) {
 				fv.Set(rv.Convert(ft))
-				return true
+				return true, nil
 			}
-			return false
+			return false, ErrBindConversion
 		}
 		out := reflect.MakeSlice(ft, rv.Len(), rv.Len())
 		for i := 0; i < rv.Len(); i++ {
-			vd.setReflect(out.Index(i), unwrap(rv.Index(i).Interface()), depth+1)
-		}
-		fv.Set(out)
-		return true
-	case reflect.Array:
-		if rv.Kind() != reflect.Slice && rv.Kind() != reflect.Array {
-			return false
-		}
-		n := min(ft.Len(), rv.Len())
-		wrote := false
-		for i := range n {
-			if vd.setReflect(fv.Index(i), unwrap(rv.Index(i).Interface()), depth+1) {
-				wrote = true
+			wrote, err := vd.setReflect(out.Index(i), unwrap(rv.Index(i).Interface()), depth+1)
+			if err != nil || !wrote {
+				return false, ErrBindConversion
 			}
 		}
-		return wrote
+		fv.Set(out)
+		return true, nil
+	case reflect.Array:
+		if rv.Kind() != reflect.Slice && rv.Kind() != reflect.Array {
+			return false, ErrBindConversion
+		}
+		n := min(ft.Len(), rv.Len())
+		for i := range n {
+			wrote, err := vd.setReflect(fv.Index(i), unwrap(rv.Index(i).Interface()), depth+1)
+			if err != nil || !wrote {
+				return false, ErrBindConversion
+			}
+		}
+		return true, nil
 	case reflect.Map:
-		// write an entry only when both key and value convert (no phantom zero-key entry).
 		if rv.Kind() != reflect.Map {
-			return false
+			return false, ErrBindConversion
 		}
 		// deterministic order: source keys colliding after key conversion need a
 		// stable survivor (map iteration is randomized)
@@ -179,37 +208,33 @@ func (vd *validation) setReflect(fv reflect.Value, val any, depth int) bool {
 		sort.Slice(entries, func(a, b int) bool { return entries[a].less(entries[b].mapKeyOrder) })
 		out := reflect.MakeMapWithSize(ft, rv.Len())
 		kt, et := ft.Key(), ft.Elem()
-		wrote := false
 		for _, en := range entries {
 			kp := reflect.New(kt).Elem()
 			ep := reflect.New(et).Elem()
-			if vd.setReflect(kp, unwrap(en.k.Interface()), depth+1) && vd.setReflect(ep, unwrap(en.v.Interface()), depth+1) {
-				out.SetMapIndex(kp, ep)
-				wrote = true
+			keyWrote, keyErr := vd.setReflect(kp, unwrap(en.k.Interface()), depth+1)
+			valueWrote, valueErr := vd.setReflect(ep, unwrap(en.v.Interface()), depth+1)
+			if keyErr != nil || valueErr != nil || !keyWrote || !valueWrote {
+				return false, ErrBindConversion
 			}
+			out.SetMapIndex(kp, ep)
 		}
-		// empty {} succeeds; an all-fail non-empty source leaves the field untouched.
-		if wrote || rv.Len() == 0 {
-			fv.Set(out)
-			return true
-		}
-		return false
+		fv.Set(out)
+		return true, nil
 	default:
 		if rv.Type().ConvertibleTo(ft) {
 			fv.Set(rv.Convert(ft))
-			return true
+			return true, nil
 		}
-		return false
+		return false, ErrBindConversion
 	}
 }
 
-func (vd *validation) setStruct(fv reflect.Value, val any, depth int) bool {
+func (vd *Validation) setStruct(fv reflect.Value, val any, depth int) (bool, error) {
 	m, ok := asStringMap(unwrap(val))
 	if !ok {
-		return false
+		return false, ErrBindConversion
 	}
 	plan := vd.validator.getStructPlan(fv.Type())
-	wrote := false
 	for _, fp := range plan.entries {
 		if !fp.leaf {
 			continue
@@ -219,11 +244,15 @@ func (vd *validation) setStruct(fv reflect.Value, val any, depth int) bool {
 			continue
 		}
 		sub, ok := settableField(fv, fp.index)
-		if ok && sub.CanSet() && vd.setReflect(sub, valToAny(ev), depth+1) {
-			wrote = true
+		if !ok || !sub.CanSet() {
+			return false, ErrBindConversion
+		}
+		wrote, err := vd.setReflect(sub, valToAny(ev), depth+1)
+		if err != nil || !wrote {
+			return false, ErrBindConversion
 		}
 	}
-	return wrote
+	return true, nil
 }
 
 // fieldTypeByIndex resolves a leaf's type along a plan index path (pointer

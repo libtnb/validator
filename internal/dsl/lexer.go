@@ -142,7 +142,12 @@ func readArgs(input string, i int, raw bool) ([]string, int, error) {
 		}
 		if c == '&' || c == '|' {
 			// fail-fast: a lone & or | is never silently part of an argument
-			return nil, i, &ParseError{Pos: i, Msg: fmt.Sprintf("unexpected %q in argument, escape it as %q or quote the argument", string(c), "\\"+string(c))}
+			msg := fmt.Sprintf(
+				"unexpected %q in argument, escape it as %q or quote the argument",
+				string(c),
+				"\\"+string(c),
+			)
+			return nil, i, &ParseError{Pos: i, Msg: msg}
 		}
 		if c == ',' {
 			args = append(args, trimUnquoted(b.String(), protected))

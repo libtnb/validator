@@ -14,8 +14,11 @@ type filterSpec struct {
 	args []string
 }
 
-// AddFilters attaches filter chains to a field; an unknown filter errors, leaving the field unchanged.
-func (vd *validation) AddFilters(field string, filters ...string) error {
+// AddFilters appends filters atomically; unknown filters leave the field unchanged.
+func (vd *Validation) AddFilters(field string, filters ...string) error {
+	if err := vd.ensureMutable(); err != nil {
+		return err
+	}
 	candidate := vd.filters[field]
 	for _, f := range filters {
 		if f == "" {
@@ -39,7 +42,10 @@ func (vd *validation) AddFilters(field string, filters ...string) error {
 }
 
 // RemoveFilters removes named filters from a field's chain.
-func (vd *validation) RemoveFilters(field string, filters ...string) error {
+func (vd *Validation) RemoveFilters(field string, filters ...string) error {
+	if err := vd.ensureMutable(); err != nil {
+		return err
+	}
 	if len(filters) == 0 {
 		return nil
 	}
@@ -60,15 +66,19 @@ func (vd *validation) RemoveFilters(field string, filters ...string) error {
 }
 
 // ClearFilters drops a field's entire filter chain.
-func (vd *validation) ClearFilters(field string) error {
+func (vd *Validation) ClearFilters(field string) error {
+	if err := vd.ensureMutable(); err != nil {
+		return err
+	}
 	delete(vd.filters, field)
 	return nil
 }
 
-func (vd *validation) Filters() map[string]string { return copyStrMap(vd.filters) }
+// Filters returns a defensive copy of the configured filter chains.
+func (vd *Validation) Filters() map[string]string { return copyStrMap(vd.filters) }
 
-// prepareFilters computes every filtered value once, serially before any concurrent access (race-free).
-func (vd *validation) prepareFilters() {
+// prepareFilters computes values before parallel validation starts.
+func (vd *Validation) prepareFilters() {
 	if vd.filtersPrepared {
 		return
 	}
@@ -87,7 +97,7 @@ func (vd *validation) prepareFilters() {
 		}
 		// An absent value (missing, nil pointer, explicit null) has nothing to
 		// filter: running the chain would materialize a zero value ("" from
-		// trim(nil)) that SafeBind then writes over the target's data.
+		// trim(nil)) that ValidateAs then writes over the target's data.
 		if raw, ok := vd.srcLookup(name); ok && raw.IsValid() {
 			out, err := vd.applyFilters(chain, valToAny(raw))
 			if err != nil {
@@ -103,7 +113,7 @@ func (vd *validation) prepareFilters() {
 	}
 }
 
-func (vd *validation) fieldValue(name string) (reflect.Value, bool) {
+func (vd *Validation) fieldValue(name string) (reflect.Value, bool) {
 	if v, ok := vd.filtered[name]; ok {
 		return toValue(v), true
 	}
@@ -112,7 +122,7 @@ func (vd *validation) fieldValue(name string) (reflect.Value, bool) {
 
 // applyFilters folds a value through a '|'-chain; the first failing (or
 // panicking) filter stops the chain and surfaces as a field error.
-func (vd *validation) applyFilters(chain string, val any) (any, error) {
+func (vd *Validation) applyFilters(chain string, val any) (any, error) {
 	for _, spec := range parseFilterChain(chain) {
 		f, ok := vd.validator.registry.filter(spec.sig)
 		if !ok {

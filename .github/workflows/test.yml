@@ -8,7 +8,6 @@ jobs:
   test:
     strategy:
       matrix:
-        go: [ "oldstable", "stable" ]
         platform: [ ubuntu-latest, macos-latest, windows-latest ]
     runs-on: ${{ matrix.platform }}
     defaults:
@@ -21,7 +20,7 @@ jobs:
         uses: actions/setup-go@v6
         with:
           cache: true
-          go-version: ${{ matrix.go }}
+          go-version-file: go.mod
       - name: Install dependencies
         run: go mod tidy
       - name: gofmt
@@ -36,3 +35,26 @@ jobs:
         run: |
           go test -run '^$' -fuzz=FuzzParse -fuzztime=30s .
           go test -run '^$' -fuzz=FuzzSplitDive -fuzztime=30s ./internal/dsl/
+  contrib:
+    strategy:
+      matrix:
+        module: [ contrib/openapi, contrib/gormrules ]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          cache-dependency-path: |
+            go.sum
+            ${{ matrix.module }}/go.sum
+          go-version-file: go.mod
+      - name: Create local workspace
+        run: go work init . "${{ matrix.module }}"
+      - name: Verify module
+        working-directory: ${{ matrix.module }}
+        run: |
+          test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
+          go vet ./...
+          go test -race ./...

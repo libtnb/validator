@@ -1,15 +1,17 @@
 package validator
 
+import "slices"
+
 var (
-	builtinRules      []Rule
-	builtinErrorRules []ErrorRule
-	builtinFilters    []Filter
+	builtinRules   []Rule
+	builtinFilters []Filter
 )
 
-// Rules returns a copy of the catalog; the copy guards the shared backing slice.
-func Rules() []Rule           { return append([]Rule(nil), builtinRules...) }
-func ErrorRules() []ErrorRule { return append([]ErrorRule(nil), builtinErrorRules...) }
-func Filters() []Filter       { return append([]Filter(nil), builtinFilters...) }
+// Rules returns a defensive copy of the built-in boolean rules.
+func Rules() []Rule { return slices.Clone(builtinRules) }
+
+// Filters returns the built-in value filters.
+func Filters() []Filter { return slices.Clone(builtinFilters) }
 
 func registerRules(rs ...Rule)     { builtinRules = append(builtinRules, rs...) }
 func registerFilters(fs ...Filter) { builtinFilters = append(builtinFilters, fs...) }

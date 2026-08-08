@@ -30,17 +30,27 @@ type FieldRules struct {
 	Exact bool
 }
 
-// DescribeRules reports the validation rules declared on data's struct type,
+// Describe reports the validation rules declared on T,
 // for consumers that translate them into another representation — an OpenAPI
 // generator mapping min:3 to minLength, for instance. Unknown rules are
-// reported as-is rather than rejected; pair with CheckRules to catch typos.
-func (v *Validator) DescribeRules(data any) ([]FieldRules, error) {
-	t := reflect.TypeOf(data)
-	for t != nil && t.Kind() == reflect.Pointer {
-		t = t.Elem()
+// reported as-is rather than rejected; pair with Check to catch typos.
+func (v *Validator) Describe[T any]() ([]FieldRules, error) {
+	t, err := validationStructType[T]("Describe")
+	if err != nil {
+		return nil, &dsl.ParseError{Msg: err.Error()}
 	}
-	if t == nil || t.Kind() != reflect.Struct {
-		return nil, &dsl.ParseError{Msg: "DescribeRules expects a struct or a pointer to one"}
+	return v.DescribeType(t)
+}
+
+// DescribeType is the reflection-oriented form of Describe for schema
+// generators that discover nested types dynamically.
+func (v *Validator) DescribeType(t reflect.Type) ([]FieldRules, error) {
+	if t == nil {
+		return nil, &dsl.ParseError{Msg: "validator: DescribeType requires a struct type"}
+	}
+	t = derefType(t)
+	if t.Kind() != reflect.Struct {
+		return nil, &dsl.ParseError{Msg: "validator: DescribeType requires a struct type"}
 	}
 
 	sp := v.getStructPlan(t)
@@ -80,9 +90,9 @@ func (v *Validator) DescribeRules(data any) ([]FieldRules, error) {
 	return out, nil
 }
 
-// DescribeRules calls Validator.DescribeRules on the package-level default.
-func DescribeRules(data any) ([]FieldRules, error) {
-	return Default().DescribeRules(data)
+// Describe calls Validator.Describe on the package-level default.
+func Describe[T any]() ([]FieldRules, error) {
+	return Default().Describe[T]()
 }
 
 // flattenRules collects the leaves of a top-level AND chain; it reports false

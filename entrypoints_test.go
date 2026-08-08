@@ -3,6 +3,7 @@ package validator
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"math"
 	"net/url"
 	"testing"
@@ -20,43 +21,39 @@ func TestEmbeddedStructValidated(t *testing.T) {
 		embAddr
 	}
 	// strict so the empty promoted City fails, proving it is in the plan
-	v := NewValidator(WithStrictRequired())
+	v := MustNew(WithStrictRequired())
 
-	bad := v.Struct(User{Name: "x"})
+	bad := v.MustStruct(User{Name: "x"})
 	bad.Validate(context.Background())
 	if !bad.Fails() || !bad.Errors().Has("City") {
 		t.Errorf("promoted embedded City should be required, got %v", bad.Errors().All())
 	}
 
-	ok := v.Struct(User{Name: "x", embAddr: embAddr{City: "NYC"}})
+	ok := v.MustStruct(User{Name: "x", embAddr: embAddr{City: "NYC"}})
 	ok.Validate(context.Background())
 	if ok.Fails() {
 		t.Errorf("valid embedded should pass: %v", ok.Errors().All())
 	}
 }
 
-func TestAnyScalarValidatable(t *testing.T) {
-	vd := Any(42)
+func TestValueScalarValidatable(t *testing.T) {
+	vd := MustValue(42, "")
 	if err := vd.AddRules("value", "min:100"); err != nil {
 		t.Fatal(err)
 	}
 	vd.Validate(context.Background())
 	if !vd.Fails() {
-		t.Error("Any(42) with min:100 on 'value' should fail")
+		t.Error("MustValue(42) with min:100 should fail")
 	}
 }
 
 func TestJSONDecodeErrorSurfaced(t *testing.T) {
-	bad := JSON(`[1,2,3]`, map[string]string{"name": "alpha"})
-	bad.Validate(context.Background())
-	if !bad.Fails() {
-		t.Error("non-object JSON should surface a validation error")
+	if _, err := JSON(`[1,2,3]`, map[string]string{"name": "alpha"}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("non-object error = %v", err)
 	}
 
-	broken := JSON(`{not json`, map[string]string{})
-	broken.Validate(context.Background())
-	if !broken.Fails() {
-		t.Error("invalid JSON should surface a validation error")
+	if _, err := JSON(`{not json`, map[string]string{}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("invalid JSON error = %v", err)
 	}
 }
 
@@ -64,7 +61,7 @@ func TestJSONDecodeErrorSurfaced(t *testing.T) {
 func TestBooleanNamedBool(t *testing.T) {
 	type MyBool bool
 	for _, val := range []any{MyBool(true), MyBool(false)} {
-		v := Var(val, "boolean")
+		v := MustValue(val, "boolean")
 		v.Validate(context.Background())
 		if v.Fails() {
 			t.Errorf("a named bool (%v) should pass boolean, got %v", val, v.Errors().All())
@@ -77,12 +74,12 @@ type namedByteSlice []byte
 // notblank on a blank named []byte must fail: it renders as text, not the
 // byte-number form that would bypass the blank check.
 func TestNotBlankNamedBytesBypass(t *testing.T) {
-	blank := Var(namedByteSlice("   "), "notblank")
+	blank := MustValue(namedByteSlice("   "), "notblank")
 	blank.Validate(context.Background())
 	if !blank.Fails() {
 		t.Error("notblank on a blank named-[]byte must fail")
 	}
-	ok := Var(namedByteSlice("abc"), "notblank")
+	ok := MustValue(namedByteSlice("abc"), "notblank")
 	ok.Validate(context.Background())
 	if ok.Fails() {
 		t.Errorf("notblank on a non-blank named-[]byte should pass, got %v", ok.Errors().All())
@@ -94,7 +91,7 @@ func TestAsStringMapDeterministic(t *testing.T) {
 	var first bool
 	for i := range 50 {
 		m := map[any]any{1: "intval", "1": "strval"}
-		vd := Any(m)
+		vd := MustMap(m, nil)
 		if err := vd.AddRules("1", "in:intval"); err != nil {
 			t.Fatal(err)
 		}
@@ -116,7 +113,7 @@ func TestAsStringMapNaNDeterministic(t *testing.T) {
 		m := map[float64]any{}
 		m[math.NaN()] = "aaa"
 		m[math.NaN()] = "bbb"
-		vd := Any(m)
+		vd := MustMap(m, nil)
 		if err := vd.AddRules("NaN", "in:aaa"); err != nil {
 			t.Fatal(err)
 		}
@@ -139,7 +136,7 @@ func TestJSONLargeIntPrecision(t *testing.T) {
 		I int64
 	}
 	var out T
-	vd := JSON(`{"U": 18446744073709551615, "I": 9007199254740993}`, map[string]string{})
+	vd := MustJSON(`{"U": 18446744073709551615, "I": 9007199254740993}`, map[string]string{})
 	vd.Validate(context.Background())
 	if err := vd.Bind(&out); err != nil {
 		t.Fatal(err)
@@ -151,10 +148,8 @@ func TestJSONLargeIntPrecision(t *testing.T) {
 		t.Errorf("large int64 from JSON lost precision: got %d", out.I)
 	}
 	// trailing garbage after the object is rejected (json.Unmarshal parity)
-	bad := JSON(`{"x":1}garbage`, map[string]string{"x": "required"})
-	bad.Validate(context.Background())
-	if !bad.Fails() {
-		t.Error("trailing data after the JSON object must be rejected")
+	if _, err := JSON(`{"x":1}garbage`, map[string]string{"x": "required"}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("trailing data error = %v", err)
 	}
 }
 
@@ -162,9 +157,9 @@ func TestJSONLargeIntPrecision(t *testing.T) {
 func TestJSONNumberUniformWithMap(t *testing.T) {
 	// 5.0 must behave like 5, not the text "5.0"
 	for _, rule := range []string{"number", "eq:5", "in:5", "digits:1", "ne:5", "not_in:5"} {
-		j := JSON(`{"x":5.0}`, map[string]string{"x": rule})
+		j := MustJSON(`{"x":5.0}`, map[string]string{"x": rule})
 		j.Validate(context.Background())
-		m := Map(map[string]any{"x": 5.0}, map[string]string{"x": rule})
+		m := MustMap(map[string]any{"x": 5.0}, map[string]string{"x": rule})
 		m.Validate(context.Background())
 		if j.Fails() != m.Fails() {
 			t.Errorf("rule %q: JSON 5.0 fails=%v but Map 5.0 fails=%v (must be uniform)", rule, j.Fails(), m.Fails())
@@ -172,14 +167,14 @@ func TestJSONNumberUniformWithMap(t *testing.T) {
 	}
 
 	// not_in:5 must block JSON 5.0
-	nb := JSON(`{"role":5.0}`, map[string]string{"role": "not_in:5"})
+	nb := MustJSON(`{"role":5.0}`, map[string]string{"role": "not_in:5"})
 	nb.Validate(context.Background())
 	if !nb.Fails() {
 		t.Error("not_in:5 must block JSON 5.0")
 	}
 
 	// a uint64 above MaxInt64 passes number from JSON, like native uint64
-	big := JSON(`{"n":18446744073709551615}`, map[string]string{"n": "number"})
+	big := MustJSON(`{"n":18446744073709551615}`, map[string]string{"n": "number"})
 	big.Validate(context.Background())
 	if big.Fails() {
 		t.Errorf("a JSON uint64 above MaxInt64 should pass number, got %v", big.Errors().All())
@@ -188,11 +183,11 @@ func TestJSONNumberUniformWithMap(t *testing.T) {
 	// a JSON number binds to bool like a native numeric source
 	type T struct{ B bool }
 	var jb T
-	if err := JSON(`{"B":2}`, nil).Bind(&jb); err != nil {
+	if err := MustJSON(`{"B":2}`, nil).Bind(&jb); err != nil {
 		t.Fatal(err)
 	}
 	var mb T
-	_ = Map(map[string]any{"B": 2.0}, nil).Bind(&mb)
+	_ = MustMap(map[string]any{"B": 2.0}, nil).Bind(&mb)
 	if !jb.B || jb.B != mb.B {
 		t.Errorf("JSON number->bool must match Map: jb.B=%v mb.B=%v (want both true)", jb.B, mb.B)
 	}
@@ -203,7 +198,7 @@ func TestJSONNumberUniformWithMap(t *testing.T) {
 		F float64
 	}
 	var n N
-	if err := JSON(`{"U":18446744073709551615,"F":5.5}`, nil).Bind(&n); err != nil {
+	if err := MustJSON(`{"U":18446744073709551615,"F":5.5}`, nil).Bind(&n); err != nil {
 		t.Fatal(err)
 	}
 	if n.U != 18446744073709551615 || n.F != 5.5 {
@@ -214,44 +209,42 @@ func TestJSONNumberUniformWithMap(t *testing.T) {
 // Trailing data after the top-level JSON value, including a stray close delimiter, must be rejected.
 func TestJSONTrailingData(t *testing.T) {
 	for _, bad := range []string{`{"x":1}]`, `{"x":1}}`, `{"x":1}{}`, `{"x":1} garbage`, `{"x":1},`} {
-		vd := JSON(bad, map[string]string{"x": "required"})
-		vd.Validate(context.Background())
-		if !vd.Fails() {
-			t.Errorf("malformed JSON %q (trailing data) must be rejected", bad)
+		if _, err := JSON(bad, map[string]string{"x": "required"}); !errors.Is(err, ErrInvalidInput) {
+			t.Errorf("malformed JSON %q error = %v", bad, err)
 		}
 	}
-	ok := JSON("{\"x\":1}  \n\t", map[string]string{"x": "required"})
+	ok := MustJSON("{\"x\":1}  \n\t", map[string]string{"x": "required"})
 	ok.Validate(context.Background())
 	if ok.Fails() {
 		t.Errorf("valid JSON with trailing whitespace must be accepted, got %v", ok.Errors().All())
 	}
 }
 
-// Any treats any map kind as a per-field source.
-func TestAnyNonStringAnyMap(t *testing.T) {
-	vd := Any(map[string]string{"email": "not-an-email"})
+// Map accepts any map type as a per-field source.
+func TestMapConcreteValueType(t *testing.T) {
+	vd := MustMap(map[string]string{"email": "not-an-email"}, nil)
 	if err := vd.AddRules("email", "email"); err != nil {
 		t.Fatal(err)
 	}
 	vd.Validate(context.Background())
 	if !vd.Errors().Has("email") {
-		t.Errorf("Any over a map[string]string should validate per key, got %v", vd.Errors().All())
+		t.Errorf("Map over a map[string]string should validate per key, got %v", vd.Errors().All())
 	}
 }
 
 // a whitespace-only string is not numeric 0: numeric rejects it, size rules measure by length.
 func TestWhitespaceNotNumeric(t *testing.T) {
-	num := Var("   ", "numeric")
+	num := MustValue("   ", "numeric")
 	num.Validate(context.Background())
 	if !num.Fails() {
 		t.Error("numeric must reject a whitespace-only string")
 	}
-	mn := Var("   ", "min:3") // 3 runes, sized by length not as numeric 0
+	mn := MustValue("   ", "min:3") // 3 runes, sized by length not as numeric 0
 	mn.Validate(context.Background())
 	if mn.Fails() {
 		t.Errorf("min:3 on a 3-space string should pass by length, got %v", mn.Errors().All())
 	}
-	mx := Var("   ", "max:1")
+	mx := MustValue("   ", "max:1")
 	mx.Validate(context.Background())
 	if !mx.Fails() {
 		t.Error("max:1 on a 3-space string should fail by length")
@@ -260,7 +253,7 @@ func TestWhitespaceNotNumeric(t *testing.T) {
 
 // named string types (json.Number) are treated as numeric.
 func TestNamedStringNumeric(t *testing.T) {
-	vd := Var(json.Number("42"), "numeric && min:10")
+	vd := MustValue(json.Number("42"), "numeric && min:10")
 	vd.Validate(context.Background())
 	if vd.Fails() {
 		t.Errorf("json.Number(42) should be numeric and >=10, got %v", vd.Errors().All())
@@ -269,12 +262,12 @@ func TestNamedStringNumeric(t *testing.T) {
 
 // date/datetime reject whitespace-only strings.
 func TestDateWhitespace(t *testing.T) {
-	d := Var("   ", "date")
+	d := MustValue("   ", "date")
 	d.Validate(context.Background())
 	if !d.Fails() {
 		t.Error("date must reject a whitespace-only string")
 	}
-	dt := Var("   ", "datetime:2006-01-02")
+	dt := MustValue("   ", "datetime:2006-01-02")
 	dt.Validate(context.Background())
 	if !dt.Fails() {
 		t.Error("datetime must reject a whitespace-only string")
@@ -285,13 +278,13 @@ func TestDateWhitespace(t *testing.T) {
 func TestBooleanNamedString(t *testing.T) {
 	type Status string
 	for _, v := range []Status{"true", "false", "yes", "on", "0", "1"} {
-		vd := Var(v, "boolean")
+		vd := MustValue(v, "boolean")
 		vd.Validate(context.Background())
 		if vd.Fails() {
 			t.Errorf("boolean(Status(%q)) should pass", v)
 		}
 	}
-	bad := Var(Status("maybe"), "boolean")
+	bad := MustValue(Status("maybe"), "boolean")
 	bad.Validate(context.Background())
 	if !bad.Fails() {
 		t.Error("boolean(Status(maybe)) should fail")
@@ -300,12 +293,12 @@ func TestBooleanNamedString(t *testing.T) {
 
 // number accepts named string types holding integers (json.Number).
 func TestNumberNamedString(t *testing.T) {
-	ok := Var(json.Number("5"), "number")
+	ok := MustValue(json.Number("5"), "number")
 	ok.Validate(context.Background())
 	if ok.Fails() {
 		t.Errorf("number(json.Number(5)) should pass, got %v", ok.Errors().All())
 	}
-	bad := Var(json.Number("3.0"), "number")
+	bad := MustValue(json.Number("3.0"), "number")
 	bad.Validate(context.Background())
 	if !bad.Fails() {
 		t.Error("number(json.Number(3.0)) should fail (not an integer)")
@@ -316,7 +309,7 @@ func TestNumberNamedString(t *testing.T) {
 func TestDateAcceptsTimeValue(t *testing.T) {
 	now := time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC)
 	for _, rule := range []string{"date", "datetime", "datetime:2006-01-02"} {
-		vd := Var(now, rule)
+		vd := MustValue(now, rule)
 		vd.Validate(context.Background())
 		if vd.Fails() {
 			t.Errorf("%s should accept a time.Time value, got %v", rule, vd.Errors().All())
@@ -324,7 +317,7 @@ func TestDateAcceptsTimeValue(t *testing.T) {
 	}
 	// the zero time is empty, so omitempty skips it
 	var zero time.Time
-	z := Var(zero, "date")
+	z := MustValue(zero, "date")
 	z.Validate(context.Background())
 	if z.Fails() {
 		t.Error("a zero time.Time is empty, so date should skip it (omitempty)")
@@ -333,7 +326,7 @@ func TestDateAcceptsTimeValue(t *testing.T) {
 
 // []byte numbers are handled by value (numeric/min/max).
 func TestNumericByteSlice(t *testing.T) {
-	vd := Var([]byte("42"), "numeric && min:10")
+	vd := MustValue([]byte("42"), "numeric && min:10")
 	vd.Validate(context.Background())
 	if vd.Fails() {
 		t.Errorf(`[]byte("42") should be numeric and >=10, got %v`, vd.Errors().All())
@@ -342,10 +335,10 @@ func TestNumericByteSlice(t *testing.T) {
 
 // TestMapEndToEnd covers the map path: builtins, boolean DSL, cross-field siblings, idempotency.
 func TestMapEndToEnd(t *testing.T) {
-	v := NewValidator()
+	v := MustNew()
 
 	t.Run("boolean DSL with builtins", func(t *testing.T) {
-		vd := v.Map(
+		vd := v.MustMap(
 			map[string]any{"email": "a@b.com", "name": "alice"},
 			map[string]string{
 				"email": "required && email",
@@ -359,7 +352,7 @@ func TestMapEndToEnd(t *testing.T) {
 	})
 
 	t.Run("failure collects errors", func(t *testing.T) {
-		vd := v.Map(
+		vd := v.MustMap(
 			map[string]any{"email": "nope", "age": "abc"},
 			map[string]string{
 				"email": "required && email",
@@ -376,7 +369,7 @@ func TestMapEndToEnd(t *testing.T) {
 	})
 
 	t.Run("cross-field confirmed/same via siblings", func(t *testing.T) {
-		ok := v.Map(
+		ok := v.MustMap(
 			map[string]any{"password": "secret", "password_confirmation": "secret"},
 			map[string]string{"password": "required && confirmed"},
 		)
@@ -385,7 +378,7 @@ func TestMapEndToEnd(t *testing.T) {
 			t.Errorf("matching confirmation should pass: %v", ok.Errors().All())
 		}
 
-		bad := v.Map(
+		bad := v.MustMap(
 			map[string]any{"password": "secret", "password_confirmation": "different"},
 			map[string]string{"password": "required && confirmed"},
 		)
@@ -396,7 +389,7 @@ func TestMapEndToEnd(t *testing.T) {
 	})
 
 	t.Run("cross-field same/gtfield", func(t *testing.T) {
-		vd := v.Map(
+		vd := v.MustMap(
 			map[string]any{"min": 5, "max": 10},
 			map[string]string{"max": "required && gtfield:min"},
 		)
@@ -407,7 +400,7 @@ func TestMapEndToEnd(t *testing.T) {
 	})
 
 	t.Run("idempotent Validate", func(t *testing.T) {
-		vd := v.Map(map[string]any{"a": ""}, map[string]string{"a": "required"})
+		vd := v.MustMap(map[string]any{"a": ""}, map[string]string{"a": "required"})
 		vd.Validate(context.Background())
 		first := len(vd.Errors().All())
 		vd.Validate(context.Background()) // must not double-add
@@ -417,24 +410,23 @@ func TestMapEndToEnd(t *testing.T) {
 	})
 }
 
-// TestJSONAndURLValues confirms the JSON and URLValues entry points reuse the map path.
-func TestJSONAndURLValues(t *testing.T) {
-	v := NewValidator()
+func TestJSONAndValues(t *testing.T) {
+	v := MustNew()
 
-	jv := v.JSON(`{"email":"a@b.com"}`, map[string]string{"email": "required && email"})
+	jv := v.MustJSON(`{"email":"a@b.com"}`, map[string]string{"email": "required && email"})
 	jv.Validate(context.Background())
 	if jv.Fails() {
 		t.Errorf("JSON valid email should pass: %v", jv.Errors().All())
 	}
 
-	uv := v.URLValues(map[string][]string{"age": {"42"}}, map[string]string{"age": "required && numeric"})
+	uv := v.MustValues(map[string][]string{"age": {"42"}}, map[string]string{"age": "required && numeric"})
 	uv.Validate(context.Background())
 	if uv.Fails() {
-		t.Errorf("URLValues numeric should pass: %v", uv.Errors().All())
+		t.Errorf("Values numeric should pass: %v", uv.Errors().All())
 	}
 }
 
-// TestPackageHelpers covers the package-level wrappers (Default, URLValues) over the shared validator.
+// TestPackageHelpers covers the package-level wrappers (Default, Values) over the shared validator.
 func TestPackageHelpers(t *testing.T) {
 	d1, d2 := Default(), Default()
 	if d1 == nil {
@@ -445,45 +437,14 @@ func TestPackageHelpers(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	ok := URLValues(url.Values{"age": {"42"}}, map[string]string{"age": "required && numeric"})
+	ok := MustValues(url.Values{"age": {"42"}}, map[string]string{"age": "required && numeric"})
 	ok.Validate(ctx)
 	if ok.Fails() {
-		t.Errorf("package URLValues should pass: %v", ok.Errors().All())
+		t.Errorf("package Values should pass: %v", ok.Errors().All())
 	}
-	bad := URLValues(url.Values{"age": {"abc"}}, map[string]string{"age": "numeric"})
+	bad := MustValues(url.Values{"age": {"abc"}}, map[string]string{"age": "numeric"})
 	bad.Validate(ctx)
 	if !bad.Fails() {
-		t.Error("package URLValues should fail on a non-numeric value")
+		t.Error("package Values should fail on a non-numeric value")
 	}
-}
-
-// TestSetDefault verifies SetDefault installs the validator behind Default
-// and the package-level helpers.
-func TestSetDefault(t *testing.T) {
-	old := Default()
-	t.Cleanup(func() { SetDefault(old) })
-
-	custom := NewValidator(WithMessages(map[string]string{"required": "custom-msg"}))
-	SetDefault(custom)
-
-	if Default() != custom {
-		t.Fatal("Default() should return the validator installed by SetDefault")
-	}
-
-	vd := Struct(struct {
-		Name *string `validate:"required"`
-	}{})
-	vd.Validate(context.Background())
-	if got := vd.Errors().One(); got != "custom-msg" {
-		t.Errorf("package helpers should route through the installed default, got message %q", got)
-	}
-}
-
-func TestSetDefaultNilPanics(t *testing.T) {
-	defer func() {
-		if recover() == nil {
-			t.Fatal("SetDefault(nil) should panic")
-		}
-	}()
-	SetDefault(nil)
 }

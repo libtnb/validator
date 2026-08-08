@@ -14,12 +14,6 @@ func TestBuiltinCatalogNoDuplicateSignatures(t *testing.T) {
 		}
 		seen[r.Signature()] = true
 	}
-	for _, r := range ErrorRules() {
-		if seen[r.Signature()] {
-			t.Errorf("duplicate signature across rules/error-rules: %q", r.Signature())
-		}
-		seen[r.Signature()] = true
-	}
 	fseen := map[string]bool{}
 	for _, f := range Filters() {
 		if fseen[f.Signature()] {
@@ -39,7 +33,7 @@ func TestBuiltinCatalogNoDuplicateSignatures(t *testing.T) {
 
 // TestBuiltinRulesThroughDSL guards that registered builtins compile via the DSL and evaluate over a field.
 func TestBuiltinRulesThroughDSL(t *testing.T) {
-	v := NewValidator()
+	v := MustNew()
 
 	cases := []struct {
 		expr string
@@ -65,8 +59,13 @@ func TestBuiltinRulesThroughDSL(t *testing.T) {
 			t.Errorf("compile(%q): %v", c.expr, err)
 			continue
 		}
-		f := &field{name: "field", rv: reflect.ValueOf(c.val)}
-		if got := compiled.Fast(f); got != c.want {
+		f := &Field{name: "field", rv: reflect.ValueOf(c.val)}
+		got, err := compiled.Fast(f)
+		if err != nil {
+			t.Errorf("%q over %v: %v", c.expr, c.val, err)
+			continue
+		}
+		if got != c.want {
 			t.Errorf("%q over %v = %v, want %v", c.expr, c.val, got, c.want)
 		}
 	}
@@ -74,7 +73,7 @@ func TestBuiltinRulesThroughDSL(t *testing.T) {
 
 // TestBuiltinFilters spot-checks a couple of built-in filters end to end.
 func TestBuiltinFilters(t *testing.T) {
-	v := NewValidator()
+	v := MustNew()
 	trim, ok := v.registry.filter("trim")
 	if !ok {
 		t.Fatal("trim filter not registered")

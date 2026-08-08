@@ -7,7 +7,7 @@ import (
 )
 
 func TestErrorsModel(t *testing.T) {
-	e := &validationErrors{}
+	e := &Errors{}
 	if e.Error() != "" || e.Has("a") {
 		t.Fatal("empty errors should be empty")
 	}
@@ -39,15 +39,15 @@ func TestErrorsModel(t *testing.T) {
 }
 
 func TestRegistryAndFuncRule(t *testing.T) {
-	v := NewValidator(WithoutBuiltinRules())
 	called := false
-	v.RegisterFunc("always", func(f Field) bool { called = true; return true }, "nope")
+	v := MustNew(WithoutBuiltinRules(),
+		WithRuleFunc("always", func(f *Field) bool { called = true; return true }, "nope"))
 
 	r, ok := v.registry.rule("always")
 	if !ok {
 		t.Fatal("rule 'always' not registered")
 	}
-	f := &field{name: "x", rv: reflect.ValueOf("y")}
+	f := &Field{name: "x", rv: reflect.ValueOf("y")}
 	if !r.Passes(f) || !called {
 		t.Error("func rule should pass and be invoked")
 	}
@@ -57,21 +57,21 @@ func TestRegistryAndFuncRule(t *testing.T) {
 }
 
 func TestFieldBasics(t *testing.T) {
-	f := &field{name: "c", rv: reflect.ValueOf(1), ctx: context.Background()}
-	if f.Name() != "c" || f.Val().Interface() != 1 {
+	f := &Field{name: "c", rv: reflect.ValueOf(1), ctx: context.Background()}
+	if f.Name() != "c" || f.Reflect().Interface() != 1 {
 		t.Error("name/val accessors")
 	}
 	if f.Context() == nil {
 		t.Error("Context() must never be nil")
 	}
-	if _, ok := f.Sibling("x"); ok {
+	if _, ok := f.Sibling[int]("x"); ok {
 		t.Error("Sibling with no lookup must report false")
 	}
 
 	// Sibling resolves via the data source
-	vd := &validation{src: mapSource{m: map[string]any{"other": 42}}}
-	g := &field{name: "g", scope: "g", vd: vd}
-	if s, ok := g.Sibling("other"); !ok || s.Val().Interface() != 42 {
+	vd := &Validation{src: mapSource{m: map[string]any{"other": 42}}}
+	g := &Field{name: "g", scope: "g", vd: vd}
+	if s, ok := g.Sibling[int]("other"); !ok || s != 42 {
 		t.Error("Sibling should resolve via the source")
 	}
 }

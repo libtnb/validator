@@ -9,8 +9,11 @@ import (
 	"github.com/libtnb/validator/internal/dsl"
 )
 
-// AddRules ANDs rule expressions onto a field's existing one. Atomic: on error the field is unchanged.
-func (vd *validation) AddRules(field string, rules ...string) error {
+// AddRules joins expressions with AND. Invalid expressions leave rules unchanged.
+func (vd *Validation) AddRules(field string, rules ...string) error {
+	if err := vd.ensureMutable(); err != nil {
+		return err
+	}
 	candidate := vd.rules[field]
 	for _, r := range rules {
 		if strings.TrimSpace(r) == "" {
@@ -29,8 +32,11 @@ func (vd *validation) AddRules(field string, rules ...string) error {
 	return nil
 }
 
-// RemoveRules removes named rules; no names is a no-op (use ClearRules). DSL-aware.
-func (vd *validation) RemoveRules(field string, rules ...string) error {
+// RemoveRules removes named top-level rules. No names is a no-op.
+func (vd *Validation) RemoveRules(field string, rules ...string) error {
+	if err := vd.ensureMutable(); err != nil {
+		return err
+	}
 	if len(rules) == 0 {
 		return nil
 	}
@@ -52,7 +58,10 @@ func (vd *validation) RemoveRules(field string, rules ...string) error {
 }
 
 // ClearRules drops a field's entire rule expression.
-func (vd *validation) ClearRules(field string) error {
+func (vd *Validation) ClearRules(field string) error {
+	if err := vd.ensureMutable(); err != nil {
+		return err
+	}
 	if _, ok := vd.rules[field]; ok {
 		vd.ensureOwnedRules()
 		delete(vd.rules, field)
@@ -61,18 +70,18 @@ func (vd *validation) ClearRules(field string) error {
 }
 
 // Rules returns a copy of the field->expression map.
-func (vd *validation) Rules() map[string]string { return copyStrMap(vd.rules) }
+func (vd *Validation) Rules() map[string]string { return copyStrMap(vd.rules) }
 
 // ensureOwnedRules copy-on-writes vd.rules before mutation: never corrupt the shared cached map.
-func (vd *validation) ensureOwnedRules() {
+func (vd *Validation) ensureOwnedRules() {
 	if vd.rulesShared || vd.rules == nil {
 		vd.rules = copyStrMap(vd.rules)
 		vd.rulesShared = false
 	}
 }
 
-// mergeRule ANDs r onto existing; if existing dives, r joins the container segment (applies to the value, not per-element).
-func (vd *validation) mergeRule(existing, r string) string {
+// mergeRule adds r to the container side of a dive expression.
+func (vd *Validation) mergeRule(existing, r string) string {
 	if strings.TrimSpace(existing) == "" {
 		return r
 	}
@@ -89,7 +98,7 @@ func (vd *validation) mergeRule(existing, r string) string {
 	return vd.joinAnd(existing, r)
 }
 
-func (vd *validation) checkExpr(expr string) error {
+func (vd *Validation) checkExpr(expr string) error {
 	ds := vd.validator.splitDive(expr)
 	if ds.err != nil {
 		return ds.err
@@ -115,7 +124,7 @@ func (vd *validation) checkExpr(expr string) error {
 }
 
 // joinAnd ANDs existing and r, parenthesizing a top-level || side so && (tighter) doesn't capture it.
-func (vd *validation) joinAnd(existing, r string) string {
+func (vd *Validation) joinAnd(existing, r string) string {
 	if dsl.HasTopLevelOr(existing, vd.validator.isRawArg) {
 		existing = "(" + escapeTrailingBackslash(existing) + ")"
 	}

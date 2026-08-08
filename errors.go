@@ -3,60 +3,29 @@ package validator
 import (
 	"errors"
 	"slices"
-	"sort"
 	"strings"
 )
 
-var (
-	_ Errors = (*validationErrors)(nil)
-	_ error  = (*validationErrors)(nil)
-)
+var _ error = (*Errors)(nil)
 
-// Messages resolve lazily and fresh on read (no shared cache): race-free.
-type validationErrors struct {
-	items []FieldError
-	bases []string
-	// override holds per-validation message templates
+// Errors is the read-only collection produced by a Validation.
+type Errors struct {
+	items    []FieldError
+	bases    []string
 	override map[string]string
 	v        *Validator
 }
 
-func (e *validationErrors) add(fe FieldError, base string) {
-	e.items = appendGrown(e.items, fe)
-	e.bases = appendGrown(e.bases, base)
-}
-
-func (e *validationErrors) message(i int) string {
-	if e.v == nil {
-		return e.items[i].Message
-	}
-	return e.v.resolveMessage(e.items[i], e.bases[i], e.override)
-}
-
-func (e *validationErrors) build() map[string]map[string]string {
-	m := make(map[string]map[string]string, len(e.items))
-	for i := range e.items {
-		inner, ok := m[e.items[i].Field]
-		if !ok {
-			inner = make(map[string]string)
-			m[e.items[i].Field] = inner
-		}
-		// keep first message per (field,rule) for stability
-		if _, exists := inner[e.items[i].Rule]; !exists {
-			inner[e.items[i].Rule] = e.message(i)
-		}
-	}
-	return m
-}
-
-func (e *validationErrors) One() string {
+// One returns the first resolved message, or an empty string.
+func (e *Errors) One() string {
 	if len(e.items) > 0 {
 		return e.message(0)
 	}
 	return ""
 }
 
-func (e *validationErrors) OneFor(field string) string {
+// OneFor returns the first resolved message for field.
+func (e *Errors) OneFor(field string) string {
 	for i := range e.items {
 		if e.items[i].Field == field {
 			return e.message(i)
@@ -65,7 +34,8 @@ func (e *validationErrors) OneFor(field string) string {
 	return ""
 }
 
-func (e *validationErrors) Messages(field string) map[string]string {
+// Messages returns rule-to-message values for field.
+func (e *Errors) Messages(field string) map[string]string {
 	inner := make(map[string]string)
 	for i := range e.items {
 		if e.items[i].Field != field {
@@ -78,11 +48,11 @@ func (e *validationErrors) Messages(field string) map[string]string {
 	return inner
 }
 
-func (e *validationErrors) All() map[string]map[string]string { return e.build() }
+// All returns a defensive field-to-rule-to-message map.
+func (e *Errors) All() map[string]map[string]string { return e.build() }
 
-// Items returns resolved copies (Params cloned: the backing slices are shared
-// with the compiled expression cache).
-func (e *validationErrors) Items() []FieldError {
+// Items returns resolved FieldError copies.
+func (e *Errors) Items() []FieldError {
 	out := make([]FieldError, len(e.items))
 	for i := range e.items {
 		it := e.items[i]
@@ -93,7 +63,8 @@ func (e *validationErrors) Items() []FieldError {
 	return out
 }
 
-func (e *validationErrors) Has(field string) bool {
+// Has reports whether field failed validation.
+func (e *Errors) Has(field string) bool {
 	for _, it := range e.items {
 		if it.Field == field {
 			return true
@@ -102,13 +73,14 @@ func (e *validationErrors) Has(field string) bool {
 	return false
 }
 
-func (e *validationErrors) String() string { return e.Error() }
+// String returns the same stable summary as Error.
+func (e *Errors) String() string { return e.Error() }
 
-func (e *validationErrors) Error() string {
+// Error summarizes the first message for each failed field.
+func (e *Errors) Error() string {
 	if len(e.items) == 0 {
 		return ""
 	}
-	// single pass: resolve each field's first message once, then sort fields
 	first := make(map[string]string, len(e.items))
 	fields := make([]string, 0, len(e.items))
 	for i := range e.items {
@@ -118,7 +90,7 @@ func (e *validationErrors) Error() string {
 			fields = append(fields, f)
 		}
 	}
-	sort.Strings(fields)
+	slices.Sort(fields)
 
 	var b strings.Builder
 	for i, f := range fields {
@@ -132,17 +104,38 @@ func (e *validationErrors) Error() string {
 	return b.String()
 }
 
-// AsErrors extracts the Errors collection from an error returned by
-// Validation.Err (works through wrapping via errors.As).
-func AsErrors(err error) (Errors, bool) {
-	var ve *validationErrors
-	if errors.As(err, &ve) {
-		return ve, true
-	}
-	return nil, false
+// AsErrors finds an Errors collection through wrapped errors.
+func AsErrors(err error) (*Errors, bool) {
+	return errors.AsType[*Errors](err)
 }
 
-// appendGrown appends, using first-allocation cap 4 to skip the 1->2->4 realloc ladder.
+func (e *Errors) add(fe FieldError, base string) {
+	e.items = appendGrown(e.items, fe)
+	e.bases = appendGrown(e.bases, base)
+}
+
+func (e *Errors) message(i int) string {
+	if e.v == nil {
+		return e.items[i].Message
+	}
+	return e.v.resolveMessage(e.items[i], e.bases[i], e.override)
+}
+
+func (e *Errors) build() map[string]map[string]string {
+	m := make(map[string]map[string]string, len(e.items))
+	for i := range e.items {
+		inner, ok := m[e.items[i].Field]
+		if !ok {
+			inner = make(map[string]string)
+			m[e.items[i].Field] = inner
+		}
+		// Keep the first message per field and rule for stable output.
+		if _, exists := inner[e.items[i].Rule]; !exists {
+			inner[e.items[i].Rule] = e.message(i)
+		}
+	}
+	return m
+}
 func appendGrown[T any](dst []T, v T) []T {
 	if cap(dst) == 0 {
 		dst = make([]T, 0, 4)

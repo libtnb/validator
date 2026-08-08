@@ -12,8 +12,17 @@ import (
 	"github.com/libtnb/validator/conv"
 )
 
+func validResult(t *testing.T, validator *Validator, data any) bool {
+	t.Helper()
+	valid, err := validator.Valid(t.Context(), data)
+	if err != nil {
+		t.Fatalf("Valid error: %T %#v (%q)", err, err, err.Error())
+	}
+	return valid
+}
+
 func TestErrorsReturnCopy(t *testing.T) {
-	vd := Map(map[string]any{}, map[string]string{"a": "required"})
+	vd := MustMap(map[string]any{}, map[string]string{"a": "required"})
 	vd.Validate(context.Background())
 	all := vd.Errors().All()
 	delete(all, "a")
@@ -28,12 +37,15 @@ func TestErrorsReturnCopy(t *testing.T) {
 }
 
 func TestPanicRecovered(t *testing.T) {
-	v := NewValidator(WithoutBuiltinRules())
-	v.RegisterFunc("boom", func(Field) bool { panic("boom") }, "m")
-	vd := v.Map(map[string]any{"a": "x"}, map[string]string{"a": "boom"})
-	vd.Validate(context.Background()) // must not crash
-	if !vd.Fails() {
-		t.Error("a panicking rule should yield a field error, not a crash")
+	v := MustNew(WithoutBuiltinRules(),
+		WithRuleFunc("boom", func(*Field) bool { panic("boom") }, "m"))
+	vd := v.MustMap(map[string]any{"a": "x"}, map[string]string{"a": "boom"})
+	err := vd.Validate(context.Background())
+	if !errors.Is(err, ErrRulePanic) {
+		t.Fatalf("error = %v, want ErrRulePanic", err)
+	}
+	if len(vd.Errors().Items()) != 0 {
+		t.Fatalf("rule panic became field errors: %v", vd.Errors().Items())
 	}
 }
 
@@ -45,7 +57,7 @@ func (c crashStringer) String() string { return strings.Repeat("x", *c.p) } // n
 // crash through a public entry point — attach-time and filter-time value
 // stringification is as guarded as rule evaluation.
 func TestStringerPanicContained(t *testing.T) {
-	v := NewValidator()
+	v := MustNew()
 	data := map[string]crashStringer{"a": {}}
 
 	mustNotPanic := func(name string, fn func()) {
@@ -58,14 +70,14 @@ func TestStringerPanicContained(t *testing.T) {
 		fn()
 	}
 
-	mustNotPanic("Valid(map with panicking value Stringer)", func() { _ = v.Valid(data) })
+	mustNotPanic("Valid(map with panicking value Stringer)", func() { _, _ = v.Valid(t.Context(), data) })
 	mustNotPanic("Valid(map with panicking key Stringer)", func() {
-		_ = v.Valid(map[crashStringer]string{{}: "x"})
+		_, _ = v.Valid(t.Context(), map[crashStringer]string{{}: "x"})
 	})
-	mustNotPanic("Struct+Validate", func() { v.Struct(data).Validate(context.Background()) })
-	mustNotPanic("Any+Validate", func() { v.Any(data).Validate(context.Background()) })
+	mustNotPanic("Struct", func() { _, _ = v.Struct(data) })
+	mustNotPanic("Map+Validate", func() { v.MustMap(data, nil).Validate(context.Background()) })
 	mustNotPanic("prepareFilters via dotted filter", func() {
-		vd := v.Map(map[string]any{"outer": map[string]crashStringer{"b": {}}}, map[string]string{"outer.b": "alpha"})
+		vd := v.MustMap(map[string]any{"outer": map[string]crashStringer{"b": {}}}, map[string]string{"outer.b": "alpha"})
 		if err := vd.AddFilters("outer.b", "trim"); err != nil {
 			t.Fatal(err)
 		}
@@ -78,9 +90,9 @@ func TestStringerPanicContained(t *testing.T) {
 	}
 	dh := diveHolder{M: map[string]crashStringer{"k": {}}}
 	var fastOK, diagFails bool
-	mustNotPanic("Valid(dive map)", func() { fastOK = v.Valid(dh) })
+	mustNotPanic("Valid(dive map)", func() { fastOK, _ = v.Valid(t.Context(), dh) })
 	mustNotPanic("Validate(dive map)", func() {
-		vd := v.Struct(dh)
+		vd := v.MustStruct(dh)
 		vd.Validate(context.Background())
 		diagFails = vd.Fails()
 	})
@@ -99,7 +111,7 @@ func (nestedBomb) String() string { panic(nestedBomb{}) }
 type bombHolder struct{ B nestedBomb }
 
 func TestNestedStringerPanicContained(t *testing.T) {
-	v := NewValidator()
+	v := MustNew()
 	mustNotPanic := func(name string, fn func()) {
 		t.Helper()
 		defer func() {
@@ -111,18 +123,18 @@ func TestNestedStringerPanicContained(t *testing.T) {
 	}
 
 	// container-nested bomb through attach-time stringification
-	mustNotPanic("Valid(map[string]bombHolder)", func() { _ = v.Valid(map[string]bombHolder{"k": {}}) })
-	mustNotPanic("Valid(map[string][]nestedBomb)", func() { _ = v.Valid(map[string][]nestedBomb{"k": {{}}}) })
-	mustNotPanic("Any(map[string]bombHolder)+Validate", func() {
-		v.Any(map[string]bombHolder{"k": {}}).Validate(context.Background())
+	mustNotPanic("Valid(map[string]bombHolder)", func() { _, _ = v.Valid(t.Context(), map[string]bombHolder{"k": {}}) })
+	mustNotPanic("Valid(map[string][]nestedBomb)", func() { _, _ = v.Valid(t.Context(), map[string][]nestedBomb{"k": {{}}}) })
+	mustNotPanic("MustMap(map[string]bombHolder)+Validate", func() {
+		v.MustMap(map[string]bombHolder{"k": {}}, nil).Validate(context.Background())
 	})
 
 	// a rule that panics WITH a bomb: the recovery's own message formatting
 	// must not re-escape
-	rv := NewValidator(WithoutBuiltinRules())
-	rv.RegisterFunc("boom", func(Field) bool { panic(nestedBomb{}) }, "m")
+	rv := MustNew(WithoutBuiltinRules(),
+		WithRuleFunc("boom", func(*Field) bool { panic(nestedBomb{}) }, "m"))
 	mustNotPanic("rule panicking with a bomb value", func() {
-		vd := rv.Map(map[string]any{"a": "x"}, map[string]string{"a": "boom"})
+		vd := rv.MustMap(map[string]any{"a": "x"}, map[string]string{"a": "boom"})
 		vd.Validate(context.Background())
 		if !vd.Fails() {
 			t.Error("the panicking rule must degrade to a field error")
@@ -130,10 +142,9 @@ func TestNestedStringerPanicContained(t *testing.T) {
 	})
 
 	// a filter that panics with a bomb
-	fv := NewValidator()
-	fv.RegisterFilter(bombFilter{})
+	fv := MustNew(WithFilters(bombFilter{}))
 	mustNotPanic("filter panicking with a bomb value", func() {
-		vd := fv.Map(map[string]any{"a": "x"}, map[string]string{"a": "alpha"})
+		vd := fv.MustMap(map[string]any{"a": "x"}, map[string]string{"a": "alpha"})
 		if err := vd.AddFilters("a", "bombf"); err != nil {
 			t.Fatal(err)
 		}
@@ -150,9 +161,9 @@ func (bombFilter) Signature() string                  { return "bombf" }
 func (bombFilter) Handle(any, ...string) (any, error) { panic(nestedBomb{}) }
 
 func TestAddRuleParenthesized(t *testing.T) {
-	v := NewValidator()
+	v := MustNew()
 	// an appended rule must parenthesize the whole expression, not be swallowed by a top-level ||.
-	vd := v.Map(map[string]any{}, map[string]string{"a": "alpha || numeric"})
+	vd := v.MustMap(map[string]any{}, map[string]string{"a": "alpha || numeric"})
 	_ = vd.AddRules("a", "required")
 	vd.Validate(context.Background())
 	if !vd.Errors().Has("a") {
@@ -187,11 +198,17 @@ func TestRegexMatchConsolidation(t *testing.T) {
 		{`not_regex:^[a-z]+$`, "abc", true},
 		{`regex:^[a-z]+$`, "", false}, // empty passes (omitempty)
 		{`not_regex:^[a-z]+$`, "", false},
-		{`regex:(`, "x", true}, // invalid pattern fails closed
+		{`regex:(`, "x", true}, // invalid pattern is rejected during construction
 		{`not_regex:(`, "x", true},
 	}
 	for _, c := range cases {
-		v := Var(c.val, c.rule)
+		v, err := Value(c.val, c.rule)
+		if err != nil {
+			if c.rule == `regex:(` || c.rule == `not_regex:(` {
+				continue
+			}
+			t.Fatal(err)
+		}
 		v.Validate(context.Background())
 		if v.Fails() != c.wantFail {
 			t.Errorf("%s on %q: fails=%v want %v (%v)", c.rule, c.val, v.Fails(), c.wantFail, v.Errors().All())
@@ -214,14 +231,14 @@ func TestParsesAsTimeConsolidation(t *testing.T) {
 		{"datetime", "2024-01-02T15:04:05Z", false}, // no-arg -> default layouts
 	}
 	for _, c := range cases {
-		v := Var(c.val, c.rule)
+		v := MustValue(c.val, c.rule)
 		v.Validate(context.Background())
 		if v.Fails() != c.wantFail {
 			t.Errorf("%s on %q: fails=%v want %v (%v)", c.rule, c.val, v.Fails(), c.wantFail, v.Errors().All())
 		}
 	}
 	// a real time.Time is accepted
-	tv := Var(time.Now(), "date")
+	tv := MustValue(time.Now(), "date")
 	tv.Validate(context.Background())
 	if tv.Fails() {
 		t.Errorf("a real time.Time should pass date, got %v", tv.Errors().All())
@@ -240,7 +257,7 @@ func TestIsEmptyExported(t *testing.T) {
 
 // RemoveRules/RemoveFilters are DSL-aware: a separator inside a quoted/raw/escaped arg isn't structural.
 func TestRemoveRulesDSLAware(t *testing.T) {
-	vd := Map(map[string]any{"x": "abc"}, map[string]string{})
+	vd := MustMap(map[string]any{"x": "abc"}, map[string]string{})
 	if err := vd.AddRules("x", `regex:"a && b"`); err != nil {
 		t.Fatal(err)
 	}
@@ -269,9 +286,9 @@ func TestNilStructPointerAppliesTags(t *testing.T) {
 		Email string `validate:"notblank"`
 	}
 	var u *User // nil pointer
-	nilVD := Struct(u)
+	nilVD := MustStruct(u)
 	nilVD.Validate(context.Background())
-	zeroVD := Struct(User{})
+	zeroVD := MustStruct(User{})
 	zeroVD.Validate(context.Background())
 	if !nilVD.Fails() {
 		t.Error("a nil *struct must apply its tags (notblank fails on the zero Email), not bypass validation")
@@ -285,7 +302,7 @@ func TestNilStructPointerAppliesTags(t *testing.T) {
 		Name string `validate:"required"`
 	}
 	var a *Acct
-	sd := NewValidator(WithStrictRequired()).Struct(a)
+	sd := MustNew(WithStrictRequired()).MustStruct(a)
 	sd.Validate(context.Background())
 	if !sd.Fails() {
 		t.Error("a nil *struct under strict required must fail (zero Name), not bypass")
@@ -296,33 +313,31 @@ func (nilSliceFilter) Signature() string { return "r5nilslice" }
 
 func (nilSliceFilter) Handle(any, ...string) (any, error) { var s []string; return s, nil }
 
-type rawArgErrorRule struct{}
+type rawArgFallibleRule struct{}
 
-func (rawArgErrorRule) Signature() string { return "r6raw" }
+func (rawArgFallibleRule) Signature() string { return "r6raw" }
 
-func (rawArgErrorRule) IsRawArg() bool { return true }
+func (rawArgFallibleRule) IsRawArg() bool { return true }
 
-func (rawArgErrorRule) PassesE(f Field) error {
+func (rawArgFallibleRule) Validate(f *Field) (bool, error) {
 	if a := f.Attrs(); len(a) == 1 && a[0] == "a,b" {
-		return nil // raw arg arrived unsplit
+		return true, nil
 	}
-	return errors.New("raw arg was comma-split")
+	return false, nil
 }
 
-// an ErrorRule declaring IsRawArg drives raw-arg lexing (mirrors ErrorRule-over-Rule priority).
-func TestErrorRuleRawArg(t *testing.T) {
-	v := NewValidator()
-	v.RegisterErrorRule(rawArgErrorRule{})
-	vd := v.Var("x", `r6raw:a,b`)
+func TestFallibleRuleRawArg(t *testing.T) {
+	v := MustNew(WithFallibleRules(rawArgFallibleRule{}))
+	vd := v.MustValue("x", `r6raw:a,b`)
 	vd.Validate(context.Background())
 	if vd.Fails() {
-		t.Errorf("an ErrorRule with IsRawArg must receive the raw unsplit arg, got %v", vd.Errors().All())
+		t.Errorf("a fallible rule with IsRawArg must receive the raw unsplit arg, got %v", vd.Errors().All())
 	}
 }
 
 // an all-failing OR chain surfaces one "||" parent in the public set; any satisfied branch passes.
 func TestOrChainAggregation(t *testing.T) {
-	allFail := Var("ZZZ", "in:a || in:b || in:c || in:d")
+	allFail := MustValue("ZZZ", "in:a || in:b || in:c || in:d")
 	allFail.Validate(context.Background())
 	if !allFail.Fails() {
 		t.Error("an all-failing OR chain must fail")
@@ -331,7 +346,7 @@ func TestOrChainAggregation(t *testing.T) {
 	if got := allFail.Errors().Messages("value"); got["||"] == "" {
 		t.Errorf("an all-failing OR must surface the || parent, got %v", got)
 	}
-	oneOK := Var("c", "in:a || in:b || in:c || in:d")
+	oneOK := MustValue("c", "in:a || in:b || in:c || in:d")
 	oneOK.Validate(context.Background())
 	if oneOK.Fails() {
 		t.Errorf("an OR chain with a satisfied branch must pass, got %v", oneOK.Errors().All())
@@ -349,7 +364,7 @@ func TestOrChainNoQuadraticBlowup(t *testing.T) {
 	}
 	expr := b.String()
 	completesWithin(t, "large all-failing OR chain", func() {
-		v := Var("zzz", expr)
+		v := MustValue("zzz", expr)
 		v.Validate(context.Background())
 		if !v.Fails() {
 			t.Error("the all-failing OR chain should fail")
@@ -359,8 +374,8 @@ func TestOrChainNoQuadraticBlowup(t *testing.T) {
 
 // AddRule must parenthesize an added top-level || rule, so the existing rule isn't grafted onto one branch.
 func TestAddRuleOrRuleParenthesized(t *testing.T) {
-	v := NewValidator()
-	vd := v.Map(map[string]any{"a": "123"}, map[string]string{"a": "boolean"})
+	v := MustNew()
+	vd := v.MustMap(map[string]any{"a": "123"}, map[string]string{"a": "boolean"})
 	_ = vd.AddRules("a", "alpha || numeric")
 	vd.Validate(context.Background())
 	// "boolean && (alpha || numeric)" fails "123"; without the paren it would pass via numeric.
@@ -371,7 +386,7 @@ func TestAddRuleOrRuleParenthesized(t *testing.T) {
 
 // Errors is a pure collection (no error embed); Err() is nil on success.
 func TestErrorsPureCollectionAndErr(t *testing.T) {
-	ok := Map(map[string]any{"a": "x"}, map[string]string{"a": "alpha"})
+	ok := MustMap(map[string]any{"a": "x"}, map[string]string{"a": "alpha"})
 	ok.Validate(context.Background())
 	if ok.Err() != nil {
 		t.Errorf("Err() must be nil on success, got %v", ok.Err())
@@ -383,7 +398,7 @@ func TestErrorsPureCollectionAndErr(t *testing.T) {
 		t.Errorf("String() must be empty on success, got %q", ok.Errors().String())
 	}
 
-	bad := Map(map[string]any{"a": "9"}, map[string]string{"a": "alpha"})
+	bad := MustMap(map[string]any{"a": "9"}, map[string]string{"a": "alpha"})
 	bad.Validate(context.Background())
 	if err := bad.Err(); err == nil {
 		t.Error("Err() must be non-nil on failure")
@@ -397,8 +412,8 @@ func TestErrorsPureCollectionAndErr(t *testing.T) {
 
 // AddRule/AddFilters validate eagerly (fail fast) and leave the field intact.
 func TestAddRuleEagerValidate(t *testing.T) {
-	v := NewValidator()
-	vd := v.Map(map[string]any{}, map[string]string{})
+	v := MustNew()
+	vd := v.MustMap(map[string]any{}, map[string]string{})
 	if err := vd.AddRules("a", "required && nosuchrule"); err == nil {
 		t.Error("AddRule with an unknown rule should error")
 	}
@@ -424,11 +439,11 @@ func TestAddRuleEagerValidate(t *testing.T) {
 
 // a literal field name ending in ']' must not pick up base-name config.
 func TestLiteralBracketFieldNoLeak(t *testing.T) {
-	v := NewValidator(
+	v := MustNew(
 		WithMessages(map[string]string{"items.alpha": "LEAKED"}),
 		WithAttributes(map[string]string{"items": "Items"}),
 	)
-	vd := v.Map(map[string]any{"items[0]": "9"}, map[string]string{"items[0]": "alpha"})
+	vd := v.MustMap(map[string]any{"items[0]": "9"}, map[string]string{"items[0]": "alpha"})
 	vd.Validate(context.Background())
 	got := vd.Errors().OneFor("items[0]")
 	if got == "LEAKED" || strings.Contains(got, "Items") {
@@ -436,11 +451,11 @@ func TestLiteralBracketFieldNoLeak(t *testing.T) {
 	}
 }
 
-type failErrorRule struct{ sig string }
+type failingFallibleRule struct{ sig string }
 
-func (r failErrorRule) Signature() string { return r.sig }
+func (r failingFallibleRule) Signature() string { return r.sig }
 
-func (r failErrorRule) PassesE(Field) error { return errors.New("forced fail") }
+func (r failingFallibleRule) Validate(*Field) (bool, error) { return false, nil }
 
 // validate:"-" skips the whole subtree's validation, yet the subtree stays bindable.
 func TestDashStructSubtreeNotValidated(t *testing.T) {
@@ -451,7 +466,7 @@ func TestDashStructSubtreeNotValidated(t *testing.T) {
 		Name   string `validate:"required"`
 		Nested Inner  `validate:"-"`
 	}
-	vd := Struct(Outer{Name: "ok", Nested: Inner{Email: "not-an-email"}})
+	vd := MustStruct(Outer{Name: "ok", Nested: Inner{Email: "not-an-email"}})
 	vd.Validate(context.Background())
 	if vd.Fails() {
 		t.Errorf(`validate:"-" struct must skip its whole subtree's validation, got %v`, vd.Errors().All())
@@ -473,7 +488,7 @@ func TestDashStructSubtreeNotValidated(t *testing.T) {
 		Embed `validate:"-"`
 		Name  string `validate:"required"`
 	}
-	vd2 := Struct(T{Embed: Embed{Score: 5}, Name: "n"})
+	vd2 := MustStruct(T{Embed: Embed{Score: 5}, Name: "n"})
 	vd2.Validate(context.Background())
 	if vd2.Fails() {
 		t.Errorf(`validate:"-" embedded must skip its subtree's validation, got %v`, vd2.Errors().All())
@@ -482,7 +497,7 @@ func TestDashStructSubtreeNotValidated(t *testing.T) {
 
 // a whitespace-only rule expression is a no-op (like "").
 func TestWhitespaceExprNoOp(t *testing.T) {
-	vd := Map(map[string]any{"a": "x"}, map[string]string{"a": "   "})
+	vd := MustMap(map[string]any{"a": "x"}, map[string]string{"a": "   "})
 	vd.Validate(context.Background())
 	if vd.Fails() {
 		t.Errorf("a whitespace-only rule expression should be a no-op, got %v", vd.Errors().All())
@@ -490,7 +505,7 @@ func TestWhitespaceExprNoOp(t *testing.T) {
 	type S struct {
 		X string `validate:" "`
 	}
-	sv := Struct(S{X: "y"})
+	sv := MustStruct(S{X: "y"})
 	sv.Validate(context.Background())
 	if sv.Fails() {
 		t.Errorf("a whitespace validate tag should be a no-op, got %v", sv.Errors().All())
@@ -501,7 +516,7 @@ func (r *nilStringer) String() string { return r.s }
 
 // AddRules with a whitespace-only rule is a no-op, not a parse error.
 func TestAddRulesWhitespaceNoOp(t *testing.T) {
-	vd := Map(map[string]any{"x": "ok"}, map[string]string{})
+	vd := MustMap(map[string]any{"x": "ok"}, map[string]string{})
 	if err := vd.AddRules("x", "   "); err != nil {
 		t.Errorf("AddRules with a whitespace-only rule should be a no-op, got error: %v", err)
 	}
@@ -513,7 +528,7 @@ func TestAddRulesWhitespaceNoOp(t *testing.T) {
 
 // AddRules onto a whitespace-only existing expression treats it as absent (not "   && alpha").
 func TestAddRulesOntoWhitespaceExisting(t *testing.T) {
-	vd := Map(map[string]any{"x": "9"}, map[string]string{"x": "   "})
+	vd := MustMap(map[string]any{"x": "9"}, map[string]string{"x": "   "})
 	if err := vd.AddRules("x", "alpha"); err != nil {
 		t.Fatalf("AddRules onto a whitespace-existing field should not error: %v", err)
 	}
@@ -547,7 +562,7 @@ func TestToIntTruncatesFractional(t *testing.T) {
 
 // TestValid covers the pooled fast path and asserts it agrees with the full Struct path.
 func TestValid(t *testing.T) {
-	v := NewValidator()
+	v := MustNew()
 	cases := []struct {
 		name string
 		data benchUser
@@ -560,14 +575,14 @@ func TestValid(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := v.Valid(c.data)
+			got := validResult(t, v, c.data)
 			if got != c.want {
 				t.Errorf("Valid() = %v, want %v", got, c.want)
 			}
-			vd := v.Struct(c.data)
+			vd := v.MustStruct(c.data)
 			vd.Validate(context.Background())
 			if (!vd.Fails()) != got {
-				t.Errorf("Valid()=%v disagrees with Struct().Fails()=%v", got, vd.Fails())
+				t.Errorf("Valid()=%v disagrees with MustStruct().Fails()=%v", got, vd.Fails())
 			}
 		})
 	}
@@ -580,24 +595,23 @@ func TestValidZeroAlloc(t *testing.T) {
 		Name string `validate:"required && alpha && min:3"`
 		Age  int    `validate:"required && gte:18 && lte:120"`
 	}
-	v := NewValidator()
+	v := MustNew()
 	// pre-boxed
 	var pass any = u{Name: "alice", Age: 30}
 	var fail any = u{Name: "al1ce", Age: 5}
-	if a := testing.AllocsPerRun(200, func() { _ = v.Valid(pass) }); a != 0 {
+	if a := testing.AllocsPerRun(200, func() { _, _ = v.Valid(context.Background(), pass) }); a != 0 {
 		t.Errorf("Valid(success) allocated %v times, want 0", a)
 	}
-	if a := testing.AllocsPerRun(200, func() { _ = v.Valid(fail) }); a != 0 {
+	if a := testing.AllocsPerRun(200, func() { _, _ = v.Valid(context.Background(), fail) }); a != 0 {
 		t.Errorf("Valid(failure) allocated %v times, want 0", a)
 	}
 }
 
-// The rules-map plan cache never serves a stale plan: caller-map mutation and
-// Register* both invalidate it.
+// The rules-map plan cache verifies caller-map content on every pointer hit.
 func TestMapPlanCacheFreshness(t *testing.T) {
-	v := NewValidator()
+	v := MustNew()
 	rules := map[string]string{"a": "alpha"}
-	one := v.Map(map[string]any{"a": "abc"}, rules)
+	one := v.MustMap(map[string]any{"a": "abc"}, rules)
 	one.Validate(context.Background())
 	if one.Fails() {
 		t.Fatalf("alpha should pass, got %v", one.Errors().All())
@@ -605,33 +619,34 @@ func TestMapPlanCacheFreshness(t *testing.T) {
 
 	// mutate the same map object: the next validation must follow the new content
 	rules["a"] = "numeric"
-	two := v.Map(map[string]any{"a": "abc"}, rules)
+	two := v.MustMap(map[string]any{"a": "abc"}, rules)
 	two.Validate(context.Background())
 	if !two.Fails() {
 		t.Error("a mutated caller rules map must not be served the stale plan")
 	}
 
-	// Register* overriding a builtin invalidates cached plans
-	rv := NewValidator()
-	r1 := rv.Map(map[string]any{"x": "abc"}, map[string]string{"x": "alpha"})
+	// Validators have independent immutable rule registries.
+	rv := MustNew()
+	r1 := rv.MustMap(map[string]any{"x": "abc"}, map[string]string{"x": "alpha"})
 	r1.Validate(context.Background())
 	if r1.Fails() {
 		t.Fatal("builtin alpha should pass")
 	}
-	rv.RegisterFunc("alpha", func(Field) bool { return false }, "m")
-	r2 := rv.Map(map[string]any{"x": "abc"}, map[string]string{"x": "alpha"})
+	overridden := MustNew(WithoutBuiltinRules(),
+		WithRuleFunc("alpha", func(*Field) bool { return false }, "m"))
+	r2 := overridden.MustMap(map[string]any{"x": "abc"}, map[string]string{"x": "alpha"})
 	r2.Validate(context.Background())
 	if !r2.Fails() {
-		t.Error("a validation created after Register* must see the override, not a cached plan")
+		t.Error("custom immutable registry did not use its alpha rule")
 	}
 
 	// AddRules on one validation must not leak into another sharing the plan
 	shared := map[string]string{"y": "alpha"}
-	va := v.Map(map[string]any{"y": "abc"}, shared)
+	va := v.MustMap(map[string]any{"y": "abc"}, shared)
 	if err := va.AddRules("y", "min:10"); err != nil {
 		t.Fatal(err)
 	}
-	vb := v.Map(map[string]any{"y": "abc"}, shared)
+	vb := v.MustMap(map[string]any{"y": "abc"}, shared)
 	vb.Validate(context.Background())
 	if vb.Fails() {
 		t.Errorf("AddRules on a sibling validation must not leak into the shared plan, got %v", vb.Errors().All())
@@ -648,63 +663,65 @@ func TestValidDive(t *testing.T) {
 		Tags []string          `validate:"dive && alpha"`
 		Meta map[string]string `validate:"dive && numeric"`
 	}
-	v := NewValidator()
-	if !v.Valid(bag{Tags: []string{"foo", "bar"}, Meta: map[string]string{"a": "1"}}) {
+	v := MustNew()
+	if !validResult(t, v, bag{Tags: []string{"foo", "bar"}, Meta: map[string]string{"a": "1"}}) {
 		t.Error("valid dive elements should pass")
 	}
-	if v.Valid(bag{Tags: []string{"foo", "b4r"}}) {
+	if validResult(t, v, bag{Tags: []string{"foo", "b4r"}}) {
 		t.Error("a non-alpha slice element should fail dive")
 	}
-	if v.Valid(bag{Meta: map[string]string{"a": "x"}}) {
+	if validResult(t, v, bag{Meta: map[string]string{"a": "x"}}) {
 		t.Error("a non-numeric map element should fail dive")
 	}
 }
 
-// TestValidParallel drives Valid() through the parallel struct plan.
-func TestValidParallel(t *testing.T) {
+func TestValidationParallel(t *testing.T) {
 	type wide struct {
 		A string `validate:"required && alpha"`
 		B string `validate:"required && alpha"`
 		C string `validate:"required && alpha"`
 		D string `validate:"required && alpha"`
 	}
-	v := NewValidator(WithParallel(2))
-	if !v.Valid(wide{A: "a", B: "b", C: "c", D: "d"}) {
+	v := MustNew(WithParallel(2))
+	valid := v.MustStruct(wide{A: "a", B: "b", C: "c", D: "d"})
+	if err := valid.Validate(t.Context()); err != nil {
 		t.Error("all-valid wide struct should pass under parallel")
 	}
-	if v.Valid(wide{A: "a", B: "2", C: "c", D: "d"}) {
+	invalid := v.MustStruct(wide{A: "a", B: "2", C: "c", D: "d"})
+	if err := invalid.Validate(t.Context()); err == nil {
 		t.Error("a non-alpha field should fail under parallel")
 	}
 }
 
-// fieldAccessRule exercises the Field accessors: Context, RootData, Name, Sibling.
+// fieldAccessRule exercises the Field accessors: Context, Root, Name, Sibling.
 type fieldAccessRule struct{}
 
 func (fieldAccessRule) Signature() string { return "fieldaccess" }
 func (fieldAccessRule) Message() string   { return "{field} failed fieldaccess" }
-func (fieldAccessRule) Passes(f Field) bool {
-	if f.Context() == nil || f.RootData() == nil || f.Name() == "" {
+func (fieldAccessRule) Passes(f *Field) bool {
+	if _, ok := f.Root[any](); f.Context() == nil || !ok || f.Name() == "" {
 		return false
 	}
-	other, ok := f.Sibling("Other")
-	return ok && other.Val().String() == "ok"
+	other, ok := f.Sibling[string]("Other")
+	return ok && other == "ok"
 }
 
-// dataOnlyRule reads just RootData(), reaching the map/var source.raw() paths.
+// dataOnlyRule reads just Root(), reaching the map/value source.raw() paths.
 type dataOnlyRule struct{}
 
-func (dataOnlyRule) Signature() string   { return "dataonly" }
-func (dataOnlyRule) Message() string     { return "{field} failed dataonly" }
-func (dataOnlyRule) Passes(f Field) bool { return f.RootData() != nil }
+func (dataOnlyRule) Signature() string { return "dataonly" }
+func (dataOnlyRule) Message() string   { return "{field} failed dataonly" }
+func (dataOnlyRule) Passes(f *Field) bool {
+	_, ok := f.Root[any]()
+	return ok
+}
 
-// TestRegisterRuleAndFieldAccessors covers RegisterRule and Field accessors across struct/map/var sources.
-func TestRegisterRuleAndFieldAccessors(t *testing.T) {
-	v := NewValidator()
-	v.RegisterRule(fieldAccessRule{})
-	v.RegisterRule(dataOnlyRule{})
+// TestCustomRulesAndFieldAccessors covers custom rules and Field accessors.
+func TestCustomRulesAndFieldAccessors(t *testing.T) {
+	v := MustNew(WithRules(fieldAccessRule{}, dataOnlyRule{}))
 	ctx := context.Background()
 
-	check := func(name string, vd Validation, wantPass bool) {
+	check := func(name string, vd *Validation, wantPass bool) {
 		t.Helper()
 		vd.Validate(ctx)
 		if vd.Fails() == wantPass {
@@ -717,22 +734,22 @@ func TestRegisterRuleAndFieldAccessors(t *testing.T) {
 		Target string `validate:"fieldaccess"`
 		Other  string
 	}
-	check("struct pass", v.Struct(payload{Target: "x", Other: "ok"}), true)
-	check("struct fail", v.Struct(payload{Target: "x", Other: "no"}), false)
+	check("struct pass", v.MustStruct(payload{Target: "x", Other: "ok"}), true)
+	check("struct fail", v.MustStruct(payload{Target: "x", Other: "no"}), false)
 
 	// map source
-	check("map pass", v.Map(map[string]any{"Target": "x", "Other": "ok"}, map[string]string{"Target": "fieldaccess"}), true)
-	check("map fail", v.Map(map[string]any{"Target": "x", "Other": "no"}, map[string]string{"Target": "fieldaccess"}), false)
+	check("map pass", v.MustMap(map[string]any{"Target": "x", "Other": "ok"}, map[string]string{"Target": "fieldaccess"}), true)
+	check("map fail", v.MustMap(map[string]any{"Target": "x", "Other": "no"}, map[string]string{"Target": "fieldaccess"}), false)
 
 	// var source
-	check("var data", v.Var("anything", "dataonly"), true)
+	check("var data", v.MustValue("anything", "dataonly"), true)
 }
 
-// TestFieldNilDefensiveAccessors covers the defensive nil branches of RootData/Context.
+// TestFieldNilDefensiveAccessors covers the defensive nil branches of Root/Context.
 func TestFieldNilDefensiveAccessors(t *testing.T) {
-	f := &field{name: "x"} // no vd, no ctx
-	if f.RootData() != nil {
-		t.Error("RootData() with a nil validation should return nil")
+	f := &Field{name: "x"} // no vd, no ctx
+	if _, ok := f.Root[any](); ok {
+		t.Error("Root() with a nil validation should report false")
 	}
 	if f.Context() == nil {
 		t.Error("Context() with a nil ctx should fall back to non-nil Background")
@@ -741,7 +758,7 @@ func TestFieldNilDefensiveAccessors(t *testing.T) {
 
 // ClearRules/ClearFilters drop a field's whole expression/chain; Remove* with no names is a no-op.
 func TestClearRulesAndFilters(t *testing.T) {
-	vd := Map(map[string]any{"x": "abc"}, map[string]string{"x": "required && alpha"})
+	vd := MustMap(map[string]any{"x": "abc"}, map[string]string{"x": "required && alpha"})
 	if err := vd.RemoveRules("x"); err != nil { // no names -> no-op
 		t.Fatal(err)
 	}
@@ -755,7 +772,7 @@ func TestClearRulesAndFilters(t *testing.T) {
 		t.Error("ClearRules must drop the field's expression")
 	}
 
-	fv := Map(map[string]any{"y": "  hi  "}, map[string]string{"y": "required"})
+	fv := MustMap(map[string]any{"y": "  hi  "}, map[string]string{"y": "required"})
 	if err := fv.AddFilters("y", "trim"); err != nil {
 		t.Fatal(err)
 	}
@@ -776,19 +793,19 @@ func TestClearRulesAndFilters(t *testing.T) {
 // sometimes: PATCH semantics — an absent key skips every rule, a present key validates fully.
 func TestSometimes(t *testing.T) {
 	rules := map[string]string{"email": "sometimes && required && email"}
-	v := NewValidator()
+	v := MustNew()
 
-	absent := v.Map(map[string]any{}, rules)
+	absent := v.MustMap(map[string]any{}, rules)
 	absent.Validate(context.Background())
 	if absent.Fails() {
 		t.Errorf("absent key must skip sometimes-guarded rules: %v", absent.Errors().All())
 	}
-	bad := v.Map(map[string]any{"email": "nope"}, rules)
+	bad := v.MustMap(map[string]any{"email": "nope"}, rules)
 	bad.Validate(context.Background())
 	if !bad.Fails() {
 		t.Error("present key must run the full chain")
 	}
-	good := v.Map(map[string]any{"email": "a@b.com"}, rules)
+	good := v.MustMap(map[string]any{"email": "a@b.com"}, rules)
 	good.Validate(context.Background())
 	if good.Fails() {
 		t.Errorf("valid present value must pass: %v", good.Errors().All())
@@ -798,22 +815,22 @@ func TestSometimes(t *testing.T) {
 	type Patch struct {
 		Name *string `validate:"sometimes && required && min:3"`
 	}
-	np := v.Struct(&Patch{})
+	np := v.MustStruct(&Patch{})
 	np.Validate(context.Background())
 	if np.Fails() {
 		t.Errorf("nil pointer + sometimes must skip: %v", np.Errors().All())
 	}
 	short := "ab"
-	sp := v.Struct(&Patch{Name: &short})
+	sp := v.MustStruct(&Patch{Name: &short})
 	sp.Validate(context.Background())
 	if !sp.Fails() {
 		t.Error("present pointer must validate min:3")
 	}
 	// Valid() fast path agrees
-	if !v.Valid(&Patch{}) {
+	if !validResult(t, v, &Patch{}) {
 		t.Error("Valid: nil pointer + sometimes must pass")
 	}
-	if v.Valid(&Patch{Name: &short}) {
+	if validResult(t, v, &Patch{Name: &short}) {
 		t.Error("Valid: short present value must fail")
 	}
 }
@@ -823,17 +840,17 @@ func TestSometimes(t *testing.T) {
 func TestSometimesExplicitNull(t *testing.T) {
 	rules := map[string]string{"email": "sometimes && required && email"}
 
-	null := JSON(`{"email": null}`, rules)
+	null := MustJSON(`{"email": null}`, rules)
 	null.Validate(context.Background())
 	if !null.Fails() {
 		t.Error("explicit JSON null must fail required, not skip as absent")
 	}
-	mapNil := Map(map[string]any{"email": nil}, rules)
+	mapNil := MustMap(map[string]any{"email": nil}, rules)
 	mapNil.Validate(context.Background())
 	if !mapNil.Fails() {
 		t.Error("a present nil map value must fail required")
 	}
-	missing := JSON(`{}`, rules)
+	missing := MustJSON(`{}`, rules)
 	missing.Validate(context.Background())
 	if missing.Fails() {
 		t.Errorf("a truly missing key must still skip: %v", missing.Errors().All())
@@ -843,12 +860,12 @@ func TestSometimesExplicitNull(t *testing.T) {
 // sometimes with dive: an absent collection skips element rules too.
 func TestSometimesDive(t *testing.T) {
 	rules := map[string]string{"tags": "sometimes && required && dive && min:2"}
-	absent := Map(map[string]any{}, rules)
+	absent := MustMap(map[string]any{}, rules)
 	absent.Validate(context.Background())
 	if absent.Fails() {
 		t.Errorf("absent collection must skip dive rules: %v", absent.Errors().All())
 	}
-	bad := Map(map[string]any{"tags": []any{"ok", "x"}}, rules)
+	bad := MustMap(map[string]any{"tags": []any{"ok", "x"}}, rules)
 	bad.Validate(context.Background())
 	if !bad.Fails() {
 		t.Error("present collection must dive-validate elements")
@@ -863,14 +880,12 @@ func TestSometimesPlacementRejected(t *testing.T) {
 		"under not":    "!sometimes",
 		"dive element": "dive && sometimes && notblank",
 	} {
-		vd := Map(map[string]any{"x": ""}, map[string]string{"x": rule})
-		vd.Validate(context.Background())
-		if !vd.Fails() {
-			t.Errorf("%s (%q) must be rejected at compile time", name, rule)
+		if _, err := Map(map[string]any{"x": ""}, map[string]string{"x": rule}); !errors.Is(err, ErrInvalidRules) {
+			t.Errorf("%s (%q) error = %v", name, rule, err)
 		}
 	}
 	// AddRules fail-fast agrees
-	av := Map(map[string]any{}, map[string]string{})
+	av := MustMap(map[string]any{}, map[string]string{})
 	if err := av.AddRules("x", "sometimes || required"); err == nil {
 		t.Error("AddRules must reject sometimes under ||")
 	}
@@ -883,57 +898,56 @@ func TestSometimesPlacementRejected(t *testing.T) {
 	}
 }
 
-func TestCheckRules(t *testing.T) {
+func TestCheck(t *testing.T) {
 	type Good struct {
 		Email string `validate:"required && email"`
 		Inner struct {
 			Port int `validate:"port"`
 		}
 	}
-	if err := CheckRules(Good{}); err != nil {
-		t.Errorf("CheckRules on valid tags: %v", err)
+	if err := Check[Good](); err != nil {
+		t.Errorf("Check on valid tags: %v", err)
 	}
 	type Bad struct {
 		A string `validate:"required && no_such_rule"`
 		B string `validate:"regex:\"[\""`
 	}
-	err := CheckRules(&Bad{})
+	err := Check[Bad]()
 	if err == nil {
-		t.Fatal("CheckRules must report bad tags")
+		t.Fatal("Check must report bad tags")
 	}
 	msg := err.Error()
-	if !strings.Contains(msg, "A:") || !strings.Contains(msg, "B:") {
+	if !strings.Contains(msg, `field "A"`) || !strings.Contains(msg, `field "B"`) {
 		t.Errorf("both bad fields must be reported, got %q", msg)
 	}
-	if err := CheckRules(42); err == nil {
+	if err := Check[int](); err == nil {
 		t.Error("non-struct input must error")
 	}
 }
 
-func TestRegisterStringFunc(t *testing.T) {
-	v := NewValidator()
-	v.RegisterStringFunc("prefixed", func(s string, args ...string) bool {
+func TestStringRuleOption(t *testing.T) {
+	v := MustNew(WithStringRule("prefixed", func(s string, args ...string) bool {
 		return len(args) > 0 && strings.HasPrefix(s, args[0])
-	}, "{field} must start with {0}")
+	}, "{field} must start with {0}"))
 
-	bad := v.Map(map[string]any{"x": "world"}, map[string]string{"x": "prefixed:hello"})
+	bad := v.MustMap(map[string]any{"x": "world"}, map[string]string{"x": "prefixed:hello"})
 	bad.Validate(context.Background())
 	if !bad.Fails() {
 		t.Error("prefixed:hello must fail on world")
 	}
-	good := v.Map(map[string]any{"x": "helloworld"}, map[string]string{"x": "prefixed:hello"})
+	good := v.MustMap(map[string]any{"x": "helloworld"}, map[string]string{"x": "prefixed:hello"})
 	good.Validate(context.Background())
 	if good.Fails() {
 		t.Errorf("prefixed:hello must pass on helloworld: %v", good.Errors().All())
 	}
 	// omitempty is pre-applied: empty value never reaches fn
-	empty := v.Map(map[string]any{"x": ""}, map[string]string{"x": "prefixed:hello"})
+	empty := v.MustMap(map[string]any{"x": ""}, map[string]string{"x": "prefixed:hello"})
 	empty.Validate(context.Background())
 	if empty.Fails() {
-		t.Error("RegisterStringFunc must skip empty values")
+		t.Error("WithStringRule must skip empty values")
 	}
 	// non-string values arrive rendered as strings
-	num := v.Map(map[string]any{"x": 12345}, map[string]string{"x": "prefixed:123"})
+	num := v.MustMap(map[string]any{"x": 12345}, map[string]string{"x": "prefixed:123"})
 	num.Validate(context.Background())
 	if num.Fails() {
 		t.Errorf("numeric value must render as string for fn: %v", num.Errors().All())
@@ -951,7 +965,7 @@ func TestDescribeRulesStructField(t *testing.T) {
 		Name    string   `json:"name" validate:"required"`
 		Profile *profile `json:"profile" validate:"required"`
 	}
-	frs, err := DescribeRules(user{})
+	frs, err := Describe[user]()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -968,7 +982,7 @@ func TestDescribeRulesStructField(t *testing.T) {
 }
 
 func TestErrorsItemsAndAsErrors(t *testing.T) {
-	vd := Map(map[string]any{"age": "3"}, map[string]string{"age": "min:5", "name": "required"})
+	vd := MustMap(map[string]any{"age": "3"}, map[string]string{"age": "min:5", "name": "required"})
 	vd.Validate(context.Background())
 	items := vd.Errors().Items()
 	if len(items) != 2 {

@@ -2,6 +2,7 @@ package gormrules_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/libtnb/sqlite"
@@ -29,9 +30,10 @@ func newValidator(t *testing.T) *validator.Validator {
 		t.Fatalf("seed: %v", err)
 	}
 
-	v := validator.NewValidator()
-	gormrules.Register(v, db)
-
+	v, err := gormrules.New(db)
+	if err != nil {
+		t.Fatal(err)
+	}
 	return v
 }
 
@@ -39,7 +41,7 @@ func TestExists(t *testing.T) {
 	v := newValidator(t)
 
 	for value, wantPass := range map[uint]bool{1: true, 999: false} {
-		vd := v.Map(map[string]any{"id": value}, map[string]string{"id": "exists:users,id"})
+		vd := v.MustMap(map[string]any{"id": value}, map[string]string{"id": "exists:users,id"})
 		vd.Validate(context.Background())
 		if pass := !vd.Fails(); pass != wantPass {
 			t.Errorf("exists id=%d: pass=%v, want %v", value, pass, wantPass)
@@ -50,7 +52,7 @@ func TestExists(t *testing.T) {
 func TestExists_MultipleColumns(t *testing.T) {
 	v := newValidator(t)
 
-	vd := v.Map(map[string]any{"q": "alice"}, map[string]string{"q": "exists:users,id,name"})
+	vd := v.MustMap(map[string]any{"q": "alice"}, map[string]string{"q": "exists:users,id,name"})
 	vd.Validate(context.Background())
 	if vd.Fails() {
 		t.Errorf("exists should match any listed column: %v", vd.Errors().All())
@@ -61,7 +63,7 @@ func TestNotExists(t *testing.T) {
 	v := newValidator(t)
 
 	for value, wantPass := range map[string]bool{"bob": true, "alice": false} {
-		vd := v.Map(map[string]any{"name": value}, map[string]string{"name": "not_exists:users,name"})
+		vd := v.MustMap(map[string]any{"name": value}, map[string]string{"name": "not_exists:users,name"})
 		vd.Validate(context.Background())
 		if pass := !vd.Fails(); pass != wantPass {
 			t.Errorf("not_exists name=%s: pass=%v, want %v", value, pass, wantPass)
@@ -73,7 +75,7 @@ func TestSkipsEmptyValues(t *testing.T) {
 	v := newValidator(t)
 
 	// zero values are required's business, not the database rules'
-	vd := v.Map(map[string]any{"id": 0}, map[string]string{"id": "exists:users,id"})
+	vd := v.MustMap(map[string]any{"id": 0}, map[string]string{"id": "exists:users,id"})
 	vd.Validate(context.Background())
 	if vd.Fails() {
 		t.Errorf("zero value should be skipped: %v", vd.Errors().All())
@@ -83,9 +85,40 @@ func TestSkipsEmptyValues(t *testing.T) {
 func TestRejectsBadIdentifier(t *testing.T) {
 	v := newValidator(t)
 
-	vd := v.Map(map[string]any{"id": 1}, map[string]string{"id": `exists:users,"id = 1 --"`})
-	vd.Validate(context.Background())
-	if !vd.Fails() {
-		t.Error("an unsafe identifier must fail validation")
+	if _, err := v.Map(map[string]any{"id": 1}, map[string]string{"id": `exists:users,"id = 1 --"`}); !errors.Is(err, validator.ErrInvalidRules) {
+		t.Fatalf("error = %v, want ErrInvalidRules", err)
+	}
+}
+
+func TestBackendErrorIsNotAFieldFailure(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file::memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err := gormrules.New(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sqlDB.Close(); err != nil {
+		t.Fatal(err)
+	}
+	validation := v.MustValue(1, "exists:users,id")
+	err = validation.Validate(t.Context())
+	var ruleErr *validator.RuleError
+	if !errors.As(err, &ruleErr) {
+		t.Fatalf("error = %v, want *validator.RuleError", err)
+	}
+	if len(validation.Errors().Items()) != 0 {
+		t.Fatalf("backend error became field errors: %v", validation.Errors().Items())
+	}
+}
+
+func TestNewRejectsNilDB(t *testing.T) {
+	if _, err := gormrules.New(nil); !errors.Is(err, gormrules.ErrNilDB) {
+		t.Fatalf("error = %v", err)
 	}
 }

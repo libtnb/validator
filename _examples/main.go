@@ -34,16 +34,16 @@ func main() {
 	}
 	demo(ctx, "invalid form", bad, nil)
 
-	zh := validator.NewValidator(validator.WithTranslation(translations.ZhHans()))
+	zh := validator.MustNew(validator.WithTranslation(translations.ZhHans()))
 	demo(ctx, "invalid form (zh)", bad, zh)
 }
 
 func demo(ctx context.Context, title string, form SignupForm, v *validator.Validator) {
-	var vd validator.Validation
+	var vd *validator.Validation
 	if v != nil {
-		vd = v.Struct(form)
+		vd = v.MustStruct(form)
 	} else {
-		vd = validator.Struct(form)
+		vd = validator.MustStruct(form)
 	}
 	vd.Validate(ctx)
 

@@ -4,8 +4,11 @@ import (
 	"strings"
 )
 
-// AddMessages implements Validation; copies and merges the input.
-func (vd *validation) AddMessages(messages map[string]string) error {
+// AddMessages overrides message templates for this validation.
+func (vd *Validation) AddMessages(messages map[string]string) error {
+	if err := vd.ensureMutable(); err != nil {
+		return err
+	}
 	if len(messages) == 0 {
 		return nil
 	}

@@ -1,4 +1,4 @@
-// Package is provides pure predicates for common string formats.
+// Package is contains pure predicates for common string formats.
 package is
 
 import (

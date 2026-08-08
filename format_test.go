@@ -16,7 +16,7 @@ type formatCase struct {
 func runFormat(t *testing.T, sig string, r Rule, cases []formatCase) {
 	t.Helper()
 	for _, c := range cases {
-		got := r.Passes(fakeField{val: reflect.ValueOf(c.val), attrs: c.attrs, name: "x"})
+		got := r.Passes(&fakeField{val: reflect.ValueOf(c.val), attrs: c.attrs, name: "x"})
 		if got != c.want {
 			t.Errorf("%s.Passes(val=%v attrs=%v)=%v want %v", sig, c.val, c.attrs, got, c.want)
 		}
@@ -38,7 +38,7 @@ func TestEmailRule(t *testing.T) {
 		{nil, true}, // omitempty
 	}
 	for _, c := range cases {
-		if got := r.Passes(fakeField{val: reflect.ValueOf(c.val)}); got != c.want {
+		if got := r.Passes(&fakeField{val: reflect.ValueOf(c.val)}); got != c.want {
 			t.Errorf("email Passes(%v)=%v want %v", c.val, got, c.want)
 		}
 	}
@@ -58,7 +58,7 @@ func TestURLRule(t *testing.T) {
 		{"", true},
 	}
 	for _, c := range cases {
-		if got := r.Passes(fakeField{val: reflect.ValueOf(c.val)}); got != c.want {
+		if got := r.Passes(&fakeField{val: reflect.ValueOf(c.val)}); got != c.want {
 			t.Errorf("url Passes(%v)=%v want %v", c.val, got, c.want)
 		}
 	}
@@ -78,7 +78,7 @@ func TestURIRule(t *testing.T) {
 		{"", true},
 	}
 	for _, c := range cases {
-		if got := r.Passes(fakeField{val: reflect.ValueOf(c.val)}); got != c.want {
+		if got := r.Passes(&fakeField{val: reflect.ValueOf(c.val)}); got != c.want {
 			t.Errorf("uri Passes(%v)=%v want %v", c.val, got, c.want)
 		}
 	}
@@ -98,7 +98,7 @@ func TestUUIDRule(t *testing.T) {
 		{"", true},
 	}
 	for _, c := range cases {
-		if got := r.Passes(fakeField{val: reflect.ValueOf(c.val)}); got != c.want {
+		if got := r.Passes(&fakeField{val: reflect.ValueOf(c.val)}); got != c.want {
 			t.Errorf("uuid Passes(%v)=%v want %v", c.val, got, c.want)
 		}
 	}
@@ -111,19 +111,19 @@ func TestIPRules(t *testing.T) {
 	if ip.Signature() != "ip" || ipv4.Signature() != "ipv4" || ipv6.Signature() != "ipv6" {
 		t.Fatalf("signatures: %q %q %q", ip.Signature(), ipv4.Signature(), ipv6.Signature())
 	}
-	if !ip.Passes(fakeField{val: reflect.ValueOf("127.0.0.1")}) || !ip.Passes(fakeField{val: reflect.ValueOf("::1")}) {
+	if !ip.Passes(&fakeField{val: reflect.ValueOf("127.0.0.1")}) || !ip.Passes(&fakeField{val: reflect.ValueOf("::1")}) {
 		t.Error("ip should accept v4 and v6")
 	}
-	if ip.Passes(fakeField{val: reflect.ValueOf("nope")}) {
+	if ip.Passes(&fakeField{val: reflect.ValueOf("nope")}) {
 		t.Error("ip should reject garbage")
 	}
-	if !ip.Passes(fakeField{val: reflect.ValueOf("")}) {
+	if !ip.Passes(&fakeField{val: reflect.ValueOf("")}) {
 		t.Error("ip omitempty should pass on empty")
 	}
-	if !ipv4.Passes(fakeField{val: reflect.ValueOf("192.168.0.1")}) || ipv4.Passes(fakeField{val: reflect.ValueOf("::1")}) {
+	if !ipv4.Passes(&fakeField{val: reflect.ValueOf("192.168.0.1")}) || ipv4.Passes(&fakeField{val: reflect.ValueOf("::1")}) {
 		t.Error("ipv4 accept/reject wrong")
 	}
-	if !ipv6.Passes(fakeField{val: reflect.ValueOf("::1")}) || ipv6.Passes(fakeField{val: reflect.ValueOf("192.168.0.1")}) {
+	if !ipv6.Passes(&fakeField{val: reflect.ValueOf("::1")}) || ipv6.Passes(&fakeField{val: reflect.ValueOf("192.168.0.1")}) {
 		t.Error("ipv6 accept/reject wrong")
 	}
 }
@@ -143,7 +143,7 @@ func TestJSONRule(t *testing.T) {
 		{"", true},
 	}
 	for _, c := range cases {
-		if got := r.Passes(fakeField{val: reflect.ValueOf(c.val)}); got != c.want {
+		if got := r.Passes(&fakeField{val: reflect.ValueOf(c.val)}); got != c.want {
 			t.Errorf("json Passes(%v)=%v want %v", c.val, got, c.want)
 		}
 	}
@@ -163,7 +163,7 @@ func TestBase64Rule(t *testing.T) {
 		{"", true},
 	}
 	for _, c := range cases {
-		if got := r.Passes(fakeField{val: reflect.ValueOf(c.val)}); got != c.want {
+		if got := r.Passes(&fakeField{val: reflect.ValueOf(c.val)}); got != c.want {
 			t.Errorf("base64 Passes(%v)=%v want %v", c.val, got, c.want)
 		}
 	}
@@ -183,7 +183,7 @@ func TestMACRule(t *testing.T) {
 		{"", true},
 	}
 	for _, c := range cases {
-		if got := r.Passes(fakeField{val: reflect.ValueOf(c.val)}); got != c.want {
+		if got := r.Passes(&fakeField{val: reflect.ValueOf(c.val)}); got != c.want {
 			t.Errorf("mac Passes(%v)=%v want %v", c.val, got, c.want)
 		}
 	}
@@ -203,7 +203,7 @@ func TestHostnameRule(t *testing.T) {
 		{"", true},
 	}
 	for _, c := range cases {
-		if got := r.Passes(fakeField{val: reflect.ValueOf(c.val)}); got != c.want {
+		if got := r.Passes(&fakeField{val: reflect.ValueOf(c.val)}); got != c.want {
 			t.Errorf("hostname Passes(%v)=%v want %v", c.val, got, c.want)
 		}
 	}
@@ -273,21 +273,18 @@ func TestNotRegexRule(t *testing.T) {
 // An invalid regex pattern is a compile-time config error, not a runtime
 // "your data is invalid" message.
 func TestRegexInvalidPatternFailsFast(t *testing.T) {
-	vd := Map(map[string]any{"x": "abc"}, map[string]string{})
+	vd := MustMap(map[string]any{"x": "abc"}, map[string]string{})
 	err := vd.AddRules("x", `regex:"["`)
 	if err == nil || !strings.Contains(err.Error(), "pattern") {
 		t.Errorf("AddRules with an invalid pattern must fail fast mentioning the pattern, got %v", err)
 	}
 
-	// via expression compile: reported as a field-level config diagnostic
-	bad := Map(map[string]any{"x": "abc"}, map[string]string{"x": `regex:"["`})
-	bad.Validate(context.Background())
-	if msg := bad.Errors().OneFor("x"); !strings.Contains(msg, "pattern") {
-		t.Errorf("an invalid pattern must surface as a config error, got %q", msg)
+	if _, err := Map(map[string]any{"x": "abc"}, map[string]string{"x": `regex:"["`}); err == nil || !strings.Contains(err.Error(), "pattern") {
+		t.Errorf("invalid pattern constructor error = %v", err)
 	}
 
 	// a valid pattern still compiles and validates
-	ok := Map(map[string]any{"x": "abc"}, map[string]string{"x": `regex:"^[a-z]+$"`})
+	ok := MustMap(map[string]any{"x": "abc"}, map[string]string{"x": `regex:"^[a-z]+$"`})
 	ok.Validate(context.Background())
 	if ok.Fails() {
 		t.Errorf("valid pattern should pass, got %v", ok.Errors().All())
@@ -296,7 +293,7 @@ func TestRegexInvalidPatternFailsFast(t *testing.T) {
 
 // Arg-less datetime must not render a dangling {0} placeholder.
 func TestDatetimeArglessMessage(t *testing.T) {
-	vd := Map(map[string]any{"d": "not-a-date"}, map[string]string{"d": "datetime"})
+	vd := MustMap(map[string]any{"d": "not-a-date"}, map[string]string{"d": "datetime"})
 	vd.Validate(context.Background())
 	msg := vd.Errors().OneFor("d")
 	if msg == "" || strings.Contains(msg, "{0}") {
@@ -330,17 +327,17 @@ func TestNewFormatRules(t *testing.T) {
 	for _, c := range cases {
 		sig := c.r.Signature()
 		for _, g := range c.good {
-			if !c.r.Passes(fakeField{val: reflect.ValueOf(g)}) {
+			if !c.r.Passes(&fakeField{val: reflect.ValueOf(g)}) {
 				t.Errorf("%s(%v) should pass", sig, g)
 			}
 		}
 		for _, b := range c.bad {
-			if c.r.Passes(fakeField{val: reflect.ValueOf(b)}) {
+			if c.r.Passes(&fakeField{val: reflect.ValueOf(b)}) {
 				t.Errorf("%s(%v) should fail", sig, b)
 			}
 		}
 		// omitempty: empty string and nil pass
-		if !c.r.Passes(fakeField{val: reflect.ValueOf("")}) || !c.r.Passes(fakeField{val: reflect.ValueOf(nil)}) {
+		if !c.r.Passes(&fakeField{val: reflect.ValueOf("")}) || !c.r.Passes(&fakeField{val: reflect.ValueOf(nil)}) {
 			t.Errorf("%s must pass empty values (omitempty)", sig)
 		}
 	}

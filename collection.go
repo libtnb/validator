@@ -18,8 +18,8 @@ type uniqueRule struct{}
 
 func (r *uniqueRule) Signature() string { return "unique" }
 
-func (r *uniqueRule) Passes(f Field) bool {
-	rv := f.Val()
+func (r *uniqueRule) Passes(f *Field) bool {
+	rv := f.Reflect()
 	if isEmptyV(rv) {
 		return true
 	}
@@ -52,7 +52,7 @@ func (r *uniqueRule) Passes(f Field) bool {
 
 func (r *uniqueRule) Message() string { return "The {field} field has duplicate values." }
 
-func (r *uniqueRule) compilePasses([]string) func(Field) bool { return r.Passes }
+func (r *uniqueRule) compilePasses([]string) func(*Field) bool { return r.Passes }
 
 type uniqueKey struct {
 	repr string

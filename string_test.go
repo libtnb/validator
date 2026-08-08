@@ -20,7 +20,7 @@ func TestAlpha(t *testing.T) {
 		{"abc!", false},
 	}
 	for _, c := range cases {
-		if got := r.Passes(fakeField{val: rvOf(c.val)}); got != c.want {
+		if got := r.Passes(&fakeField{val: rvOf(c.val)}); got != c.want {
 			t.Errorf("Alpha.Passes(%v)=%v want %v", c.val, got, c.want)
 		}
 	}
@@ -46,7 +46,7 @@ func TestAlphanum(t *testing.T) {
 		{"abc!", false},
 	}
 	for _, c := range cases {
-		if got := r.Passes(fakeField{val: rvOf(c.val)}); got != c.want {
+		if got := r.Passes(&fakeField{val: rvOf(c.val)}); got != c.want {
 			t.Errorf("Alphanum.Passes(%v)=%v want %v", c.val, got, c.want)
 		}
 	}
@@ -69,7 +69,7 @@ func TestAscii(t *testing.T) {
 		{"日本語", false},
 	}
 	for _, c := range cases {
-		if got := r.Passes(fakeField{val: rvOf(c.val)}); got != c.want {
+		if got := r.Passes(&fakeField{val: rvOf(c.val)}); got != c.want {
 			t.Errorf("Ascii.Passes(%v)=%v want %v", c.val, got, c.want)
 		}
 	}
@@ -92,7 +92,7 @@ func TestLowercase(t *testing.T) {
 		{"ABC", false},
 	}
 	for _, c := range cases {
-		if got := r.Passes(fakeField{val: rvOf(c.val)}); got != c.want {
+		if got := r.Passes(&fakeField{val: rvOf(c.val)}); got != c.want {
 			t.Errorf("Lowercase.Passes(%v)=%v want %v", c.val, got, c.want)
 		}
 	}
@@ -115,7 +115,7 @@ func TestUppercase(t *testing.T) {
 		{"abc", false},
 	}
 	for _, c := range cases {
-		if got := r.Passes(fakeField{val: rvOf(c.val)}); got != c.want {
+		if got := r.Passes(&fakeField{val: rvOf(c.val)}); got != c.want {
 			t.Errorf("Uppercase.Passes(%v)=%v want %v", c.val, got, c.want)
 		}
 	}
@@ -140,7 +140,7 @@ func TestContains(t *testing.T) {
 		{"hello", []string{"hello"}, true},
 	}
 	for _, c := range cases {
-		if got := r.Passes(fakeField{val: rvOf(c.val), attrs: c.attrs}); got != c.want {
+		if got := r.Passes(&fakeField{val: rvOf(c.val), attrs: c.attrs}); got != c.want {
 			t.Errorf("Contains.Passes(%v, %v)=%v want %v", c.val, c.attrs, got, c.want)
 		}
 	}
@@ -164,7 +164,7 @@ func TestExcludes(t *testing.T) {
 		{"hello", []string{}, true},
 	}
 	for _, c := range cases {
-		if got := r.Passes(fakeField{val: rvOf(c.val), attrs: c.attrs}); got != c.want {
+		if got := r.Passes(&fakeField{val: rvOf(c.val), attrs: c.attrs}); got != c.want {
 			t.Errorf("Excludes.Passes(%v, %v)=%v want %v", c.val, c.attrs, got, c.want)
 		}
 	}
@@ -188,7 +188,7 @@ func TestStartsWith(t *testing.T) {
 		{"hello", []string{}, true},
 	}
 	for _, c := range cases {
-		if got := r.Passes(fakeField{val: rvOf(c.val), attrs: c.attrs}); got != c.want {
+		if got := r.Passes(&fakeField{val: rvOf(c.val), attrs: c.attrs}); got != c.want {
 			t.Errorf("StartsWith.Passes(%v, %v)=%v want %v", c.val, c.attrs, got, c.want)
 		}
 	}
@@ -212,7 +212,7 @@ func TestEndsWith(t *testing.T) {
 		{"hello", []string{}, true},
 	}
 	for _, c := range cases {
-		if got := r.Passes(fakeField{val: rvOf(c.val), attrs: c.attrs}); got != c.want {
+		if got := r.Passes(&fakeField{val: rvOf(c.val), attrs: c.attrs}); got != c.want {
 			t.Errorf("EndsWith.Passes(%v, %v)=%v want %v", c.val, c.attrs, got, c.want)
 		}
 	}

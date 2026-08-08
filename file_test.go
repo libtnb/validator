@@ -51,7 +51,7 @@ func TestExtRule(t *testing.T) {
 	}
 	r := &extRule{}
 	for _, c := range cases {
-		if got := r.Passes(fakeField{val: reflect.ValueOf(c.val), attrs: c.attrs}); got != c.want {
+		if got := r.Passes(&fakeField{val: reflect.ValueOf(c.val), attrs: c.attrs}); got != c.want {
 			t.Errorf("ext(%v, %v)=%v want %v", c.val, c.attrs, got, c.want)
 		}
 	}
@@ -60,18 +60,18 @@ func TestExtRule(t *testing.T) {
 func TestMimetypesSniffs(t *testing.T) {
 	png := makeFileHeader(t, "a.png", pngHead)
 	r := &mimetypesRule{}
-	if !r.Passes(fakeField{val: reflect.ValueOf(png), attrs: []string{"image/png"}}) {
+	if !r.Passes(&fakeField{val: reflect.ValueOf(png), attrs: []string{"image/png"}}) {
 		t.Error("png content must match image/png")
 	}
-	if !r.Passes(fakeField{val: reflect.ValueOf(png), attrs: []string{"image/*"}}) {
+	if !r.Passes(&fakeField{val: reflect.ValueOf(png), attrs: []string{"image/*"}}) {
 		t.Error("png content must match the image/* wildcard")
 	}
-	if r.Passes(fakeField{val: reflect.ValueOf(png), attrs: []string{"application/pdf"}}) {
+	if r.Passes(&fakeField{val: reflect.ValueOf(png), attrs: []string{"application/pdf"}}) {
 		t.Error("png content must not match application/pdf")
 	}
 	// content sniffing, not the filename: a "renamed" executable-ish payload
 	fake := makeFileHeader(t, "totally-a.png", []byte("\x00\x01\x02\x03 binary junk"))
-	if fake == nil || r.Passes(fakeField{val: reflect.ValueOf(fake), attrs: []string{"image/png"}}) {
+	if fake == nil || r.Passes(&fakeField{val: reflect.ValueOf(fake), attrs: []string{"image/png"}}) {
 		t.Error("non-png content named .png must fail mimetypes:image/png")
 	}
 }
@@ -79,16 +79,16 @@ func TestMimetypesSniffs(t *testing.T) {
 func TestFileMinMax(t *testing.T) {
 	fh := makeFileHeader(t, "a.bin", make([]byte, 2048)) // 2kb
 	fmin, fmax := &fileminRule{}, &filemaxRule{}
-	if !fmin.Passes(fakeField{val: reflect.ValueOf(fh), attrs: []string{"1kb"}}) {
+	if !fmin.Passes(&fakeField{val: reflect.ValueOf(fh), attrs: []string{"1kb"}}) {
 		t.Error("2kb file must pass filemin:1kb")
 	}
-	if fmin.Passes(fakeField{val: reflect.ValueOf(fh), attrs: []string{"4kb"}}) {
+	if fmin.Passes(&fakeField{val: reflect.ValueOf(fh), attrs: []string{"4kb"}}) {
 		t.Error("2kb file must fail filemin:4kb")
 	}
-	if !fmax.Passes(fakeField{val: reflect.ValueOf(fh), attrs: []string{"1mb"}}) {
+	if !fmax.Passes(&fakeField{val: reflect.ValueOf(fh), attrs: []string{"1mb"}}) {
 		t.Error("2kb file must pass filemax:1mb")
 	}
-	if fmax.Passes(fakeField{val: reflect.ValueOf(fh), attrs: []string{"1kb"}}) {
+	if fmax.Passes(&fakeField{val: reflect.ValueOf(fh), attrs: []string{"1kb"}}) {
 		t.Error("2kb file must fail filemax:1kb")
 	}
 	// bad size arg is a compile-time error via CheckArgs
@@ -181,12 +181,12 @@ func TestMimetypesRejectsHTMLAsText(t *testing.T) {
 		"<details ontoggle=alert(1) open>",
 	} {
 		fh := makeFileHeader(t, "notes.txt", []byte(payload))
-		if r.Passes(fakeField{val: reflect.ValueOf(fh), attrs: []string{"text/plain"}}) {
+		if r.Passes(&fakeField{val: reflect.ValueOf(fh), attrs: []string{"text/plain"}}) {
 			t.Errorf("active markup %q must not pass mimetypes:text/plain", payload)
 		}
 	}
 	plain := makeFileHeader(t, "notes.txt", []byte("just plain notes, 1 < 2"))
-	if !r.Passes(fakeField{val: reflect.ValueOf(plain), attrs: []string{"text/plain"}}) {
+	if !r.Passes(&fakeField{val: reflect.ValueOf(plain), attrs: []string{"text/plain"}}) {
 		t.Error("actual plain text must pass mimetypes:text/plain")
 	}
 }
@@ -195,18 +195,18 @@ func TestFileRulesEndToEnd(t *testing.T) {
 	type Upload struct {
 		Avatar *multipart.FileHeader `validate:"required && ext:png,jpg && mimetypes:image/* && filemax:1mb"`
 	}
-	v := NewValidator()
-	good := v.Struct(&Upload{Avatar: makeFileHeader(t, "a.png", pngHead)})
+	v := MustNew()
+	good := v.MustStruct(&Upload{Avatar: makeFileHeader(t, "a.png", pngHead)})
 	good.Validate(context.Background())
 	if good.Fails() {
 		t.Fatalf("valid upload failed: %v", good.Errors().All())
 	}
-	missing := v.Struct(&Upload{})
+	missing := v.MustStruct(&Upload{})
 	missing.Validate(context.Background())
 	if !missing.Fails() {
 		t.Fatal("nil *FileHeader must fail required")
 	}
-	badExt := v.Struct(&Upload{Avatar: makeFileHeader(t, "a.exe", pngHead)})
+	badExt := v.MustStruct(&Upload{Avatar: makeFileHeader(t, "a.exe", pngHead)})
 	badExt.Validate(context.Background())
 	if !badExt.Fails() {
 		t.Fatal(".exe must fail ext:png,jpg")

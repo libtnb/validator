@@ -13,10 +13,10 @@ func TestStructValidate(t *testing.T) {
 		Bio   string `validate:"-"`
 		Name  string // no tag
 	}
-	v := NewValidator()
+	v := MustNew()
 
 	t.Run("valid", func(t *testing.T) {
-		vd := v.Struct(User{Email: "a@b.com", Age: 20})
+		vd := v.MustStruct(User{Email: "a@b.com", Age: 20})
 		vd.Validate(context.Background())
 		if vd.Fails() {
 			t.Errorf("valid user should pass: %v", vd.Errors().All())
@@ -24,7 +24,7 @@ func TestStructValidate(t *testing.T) {
 	})
 
 	t.Run("invalid collects field errors", func(t *testing.T) {
-		vd := v.Struct(User{Email: "nope", Age: 10})
+		vd := v.MustStruct(User{Email: "nope", Age: 10})
 		vd.Validate(context.Background())
 		if !vd.Fails() {
 			t.Fatal("invalid user should fail")
@@ -35,7 +35,7 @@ func TestStructValidate(t *testing.T) {
 	})
 
 	t.Run("pointer to struct", func(t *testing.T) {
-		vd := v.Struct(&User{Email: "a@b.com", Age: 20})
+		vd := v.MustStruct(&User{Email: "a@b.com", Age: 20})
 		vd.Validate(context.Background())
 		if vd.Fails() {
 			t.Errorf("pointer struct should validate: %v", vd.Errors().All())
@@ -48,7 +48,7 @@ func TestStructPlanCached(t *testing.T) {
 	type T struct {
 		A string `validate:"required"`
 	}
-	v := NewValidator()
+	v := MustNew()
 	p1 := v.getStructPlan(reflect.TypeFor[T]())
 	p2 := v.getStructPlan(reflect.TypeFor[T]())
 	if p1 != p2 {
@@ -65,13 +65,13 @@ func TestEmbeddedFieldTagHonored(t *testing.T) {
 	type App struct {
 		*Config `validate:"required"`
 	}
-	v := NewValidator()
-	vd := v.Struct(App{})
+	v := MustNew()
+	vd := v.MustStruct(App{})
 	vd.Validate(context.Background())
 	if !vd.Errors().Has("Config") {
 		t.Errorf("required on a nil embedded pointer must fail, got %v", vd.Errors().All())
 	}
-	ok := v.Struct(App{Config: &Config{Host: "h"}})
+	ok := v.MustStruct(App{Config: &Config{Host: "h"}})
 	ok.Validate(context.Background())
 	if ok.Fails() {
 		t.Errorf("present embedded pointer should pass, got %v", ok.Errors().All())
@@ -88,8 +88,8 @@ func TestUntaggedStructFieldResolvable(t *testing.T) {
 		Method *string `validate:"required_with:Card"`
 		Card   *Card
 	}
-	v := NewValidator()
-	vd := v.Struct(Payment{Card: &Card{Number: "4111"}})
+	v := MustNew()
+	vd := v.MustStruct(Payment{Card: &Card{Number: "4111"}})
 	vd.Validate(context.Background())
 	if !vd.Errors().Has("Method") {
 		t.Errorf("required_with must see the untagged struct field Card, got %v", vd.Errors().All())
@@ -98,7 +98,7 @@ func TestUntaggedStructFieldResolvable(t *testing.T) {
 	type Holder struct {
 		Card *Card
 	}
-	hv := v.Struct(Holder{Card: &Card{Number: "1"}})
+	hv := v.MustStruct(Holder{Card: &Card{Number: "1"}})
 	if err := hv.AddRules("Card", "required"); err != nil {
 		t.Fatal(err)
 	}
@@ -115,8 +115,8 @@ func TestOpaqueStructFieldIsLeaf(t *testing.T) {
 	type Rec struct {
 		At MyTime
 	}
-	v := NewValidator()
-	vd := v.Struct(Rec{At: MyTime{sec: 5}})
+	v := MustNew()
+	vd := v.MustStruct(Rec{At: MyTime{sec: 5}})
 	if err := vd.AddRules("At", "required"); err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +127,7 @@ func TestOpaqueStructFieldIsLeaf(t *testing.T) {
 
 	src := Rec{At: MyTime{sec: 7}}
 	var dst Rec
-	if err := v.Struct(src).Bind(&dst); err != nil {
+	if err := v.MustStruct(src).Bind(&dst); err != nil {
 		t.Fatal(err)
 	}
 	if dst.At != src.At {
@@ -141,10 +141,10 @@ func TestRecursiveStructFieldBindable(t *testing.T) {
 		Val  string
 		Next *Node
 	}
-	v := NewValidator()
+	v := MustNew()
 	src := Node{Val: "a", Next: &Node{Val: "b"}}
 	var dst Node
-	if err := v.Struct(src).Bind(&dst); err != nil {
+	if err := v.MustStruct(src).Bind(&dst); err != nil {
 		t.Fatal(err)
 	}
 	if dst.Next == nil || dst.Next.Val != "b" {
@@ -165,8 +165,8 @@ func TestShadowedSubtreeNoGhosts(t *testing.T) {
 		base
 		X string `validate:"required"`
 	}
-	v := NewValidator()
-	vd := v.Struct(Outer{X: "visible"})
+	v := MustNew()
+	vd := v.MustStruct(Outer{X: "visible"})
 	vd.Validate(context.Background())
 	if vd.Errors().Has("X.OnlyA") {
 		t.Errorf("rules on a shadowed subtree path must not run, got %v", vd.Errors().All())
@@ -195,8 +195,8 @@ func TestPruneKeepsNestedFieldsAfterDrop(t *testing.T) {
 		embB2 // X is ambiguous -> dead entry BEFORE the nested children
 		Outer inner2
 	}
-	v := NewValidator()
-	vd := v.Struct(top{})
+	v := MustNew()
+	vd := v.MustStruct(top{})
 	vd.Validate(context.Background())
 	if !vd.Errors().Has("Outer.N1") || !vd.Errors().Has("Outer.N2") {
 		t.Errorf("both nested fields must survive prune and validate, got %v", vd.Errors().All())
@@ -204,7 +204,7 @@ func TestPruneKeepsNestedFieldsAfterDrop(t *testing.T) {
 
 	src := top{Outer: inner2{N1: "a", N2: "b"}}
 	var dst top
-	if err := v.Struct(src).Bind(&dst); err != nil {
+	if err := v.MustStruct(src).Bind(&dst); err != nil {
 		t.Fatal(err)
 	}
 	if dst.Outer.N1 != "a" || dst.Outer.N2 != "b" {
@@ -225,8 +225,8 @@ func TestAmbiguousPromotionDropped(t *testing.T) {
 		embA
 		embB
 	}
-	v := NewValidator()
-	vd := v.Struct(Both{})
+	v := MustNew()
+	vd := v.MustStruct(Both{})
 	vd.Validate(context.Background())
 	if vd.Errors().Has("Code") {
 		t.Errorf("an ambiguous promoted name must validate under neither rule set, got %v", vd.Errors().All())
@@ -238,7 +238,7 @@ func TestAmbiguousPromotionDropped(t *testing.T) {
 		embB
 		Code string `validate:"notblank"`
 	}
-	sv := v.Struct(Shallow{})
+	sv := v.MustStruct(Shallow{})
 	sv.Validate(context.Background())
 	if !sv.Errors().Has("Code") {
 		t.Errorf("the shallow unambiguous Code must validate, got %v", sv.Errors().All())

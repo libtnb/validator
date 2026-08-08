@@ -1,65 +1,62 @@
 package validator
 
 import (
+	"context"
 	"net/url"
-	"sync/atomic"
+	"sync"
 )
 
-// defaultValidator is lazy: eager init would run before rule init() fills the
-// catalog. It holds nil until the first Default() call or until SetDefault
-// installs a configured instance.
-var defaultValidator atomic.Pointer[Validator]
+var defaultValidator = sync.OnceValue(func() *Validator { return MustNew() })
 
-// Default returns the shared Validator behind the package funcs; mutating it
-// is process-global. It is created on first use unless SetDefault installed
-// one earlier.
+// Default returns the shared Validator used by package-level helpers.
 func Default() *Validator {
-	if v := defaultValidator.Load(); v != nil {
-		return v
-	}
-	// racing first callers may each build one; exactly one wins the publish
-	v := NewValidator()
-	if defaultValidator.CompareAndSwap(nil, v) {
-		return v
-	}
-	return defaultValidator.Load()
+	return defaultValidator()
 }
 
-// SetDefault makes v the Validator returned by Default and used by the
-// package-level helpers (Struct, Map, JSON, ...). Like slog.SetDefault it is
-// meant to be called once during startup, before concurrent use — typically
-// with an instance carrying custom rules, messages and translations, so the
-// rest of the program can validate through the package funcs without passing
-// a *Validator around.
-func SetDefault(v *Validator) {
-	if v == nil {
-		panic("validator: SetDefault(nil)")
-	}
-	defaultValidator.Store(v)
-}
+// Struct prepares a struct-tag validation.
+func Struct(data any) (*Validation, error) { return Default().Struct(data) }
 
-func Struct(data any) Validation { return Default().Struct(data) }
+// MustStruct is Struct with panic-on-error semantics.
+func MustStruct(data any) *Validation { return Default().MustStruct(data) }
 
-// Valid reports whether data passes its struct-tag rules on the allocation-free
-// fast path; data carrying no rules (a plain map or scalar) is vacuously valid.
-// Use Struct when you need error details, Bind, or to add rules.
-func Valid(data any) bool { return Default().Valid(data) }
+// Valid reports whether data passes its struct-tag rules.
+func Valid(ctx context.Context, data any) (bool, error) { return Default().Valid(ctx, data) }
 
-func Map(data map[string]any, rules map[string]string) Validation {
+// Map prepares a Validation for any map type and explicit rules.
+func Map[M ~map[K]V, K comparable, V any](data M, rules map[string]string) (*Validation, error) {
 	return Default().Map(data, rules)
 }
 
-func JSON(data string, rules map[string]string) Validation {
+// MustMap is Map with panic-on-error semantics.
+func MustMap[M ~map[K]V, K comparable, V any](data M, rules map[string]string) *Validation {
+	return Default().MustMap(data, rules)
+}
+
+// JSON prepares a Validation from one JSON object and explicit rules.
+func JSON[Bytes ~[]byte | ~string](data Bytes, rules map[string]string) (*Validation, error) {
 	return Default().JSON(data, rules)
 }
 
-func URLValues(data url.Values, rules map[string]string) Validation {
-	return Default().URLValues(data, rules)
+// MustJSON is JSON with panic-on-error semantics.
+func MustJSON[Bytes ~[]byte | ~string](data Bytes, rules map[string]string) *Validation {
+	return Default().MustJSON(data, rules)
 }
 
-func Any(data any) Validation { return Default().Any(data) }
+// Values prepares a Validation from the first value of each form key.
+func Values(data url.Values, rules map[string]string) (*Validation, error) {
+	return Default().Values(data, rules)
+}
 
-func Var(value any, rule string) Validation { return Default().Var(value, rule) }
+// MustValues is Values with panic-on-error semantics.
+func MustValues(data url.Values, rules map[string]string) *Validation {
+	return Default().MustValues(data, rules)
+}
 
-// CheckRules reports every bad rule tag on data's struct type; see Validator.CheckRules.
-func CheckRules(data any) error { return Default().CheckRules(data) }
+// Value prepares a Validation for one value under the field name "value".
+func Value(value any, rule string) (*Validation, error) { return Default().Value(value, rule) }
+
+// MustValue is Value with panic-on-error semantics.
+func MustValue(value any, rule string) *Validation { return Default().MustValue(value, rule) }
+
+// Check reports every invalid rule tag on T; see Validator.Check.
+func Check[T any]() error { return Default().Check[T]() }

@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-func (vd *validation) srcLookup(name string) (reflect.Value, bool) {
+func (vd *Validation) srcLookup(name string) (reflect.Value, bool) {
 	if vd.ssPlan != nil {
 		return structSource{val: vd.ssVal, plan: vd.ssPlan}.lookup(name)
 	}
@@ -22,7 +22,7 @@ func (vd *validation) srcLookup(name string) (reflect.Value, bool) {
 	return vd.src.lookup(name)
 }
 
-func (vd *validation) rawData() any {
+func (vd *Validation) rawData() any {
 	if vd.ssPlan != nil {
 		return vd.ssVal.Interface()
 	}
@@ -36,7 +36,7 @@ func (vd *validation) rawData() any {
 }
 
 // resolveScoped resolves a cross-field name relative-first, then absolute.
-func (vd *validation) resolveScoped(scope, name string) (reflect.Value, bool) {
+func (vd *Validation) resolveScoped(scope, name string) (reflect.Value, bool) {
 	// only nested sources (inline struct or map) get scoping.
 	scoped := vd.ssPlan != nil
 	if !scoped {

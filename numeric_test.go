@@ -8,20 +8,20 @@ import (
 func TestNumericNonFinite(t *testing.T) {
 	num := &numericRule{}
 	for _, s := range []string{"Inf", "+Inf", "-Inf", "Infinity", "NaN", "nan"} {
-		if num.Passes(fakeField{val: rvOf(s)}) {
+		if num.Passes(&fakeField{val: rvOf(s)}) {
 			t.Errorf("numeric %q should be false", s)
 		}
 	}
-	if !num.Passes(fakeField{val: rvOf("3.14")}) {
+	if !num.Passes(&fakeField{val: rvOf("3.14")}) {
 		t.Error("numeric 3.14 should pass")
 	}
 }
 
 func TestSizeBlankThreshold(t *testing.T) {
-	if (&minRule{}).Passes(fakeField{val: rvOf("ab"), attrs: []string{""}}) {
+	if (&minRule{}).Passes(&fakeField{val: rvOf("ab"), attrs: []string{""}}) {
 		t.Error("min with blank threshold should fail")
 	}
-	if (&betweenRule{}).Passes(fakeField{val: rvOf(5), attrs: []string{"", "10"}}) {
+	if (&betweenRule{}).Passes(&fakeField{val: rvOf(5), attrs: []string{"", "10"}}) {
 		t.Error("between with blank lower bound should fail")
 	}
 }
@@ -29,22 +29,22 @@ func TestSizeBlankThreshold(t *testing.T) {
 func TestBooleanRejectsNonBinary(t *testing.T) {
 	b := &booleanRule{}
 	for _, v := range []any{2, -5, 0.5, 2.0} {
-		if b.Passes(fakeField{val: rvOf(v)}) {
+		if b.Passes(&fakeField{val: rvOf(v)}) {
 			t.Errorf("boolean %v should fail", v)
 		}
 	}
-	if !b.Passes(fakeField{val: rvOf(1)}) {
+	if !b.Passes(&fakeField{val: rvOf(1)}) {
 		t.Error("boolean 1 should pass")
 	}
-	if !b.Passes(fakeField{val: rvOf("true")}) {
+	if !b.Passes(&fakeField{val: rvOf("true")}) {
 		t.Error(`boolean "true" should pass`)
 	}
-	if b.Passes(fakeField{val: rvOf("maybe")}) {
+	if b.Passes(&fakeField{val: rvOf("maybe")}) {
 		t.Error(`boolean "maybe" should fail`)
 	}
 	// blank is not a boolean, matching numeric/date
 	for _, v := range []any{"   ", "\t\n", []byte("  ")} {
-		if b.Passes(fakeField{val: rvOf(v)}) {
+		if b.Passes(&fakeField{val: rvOf(v)}) {
 			t.Errorf("boolean %q should fail: blank is not a boolean", v)
 		}
 	}
@@ -54,13 +54,13 @@ func TestBooleanRejectsNonBinary(t *testing.T) {
 // native uint64 branch does.
 func TestNumberStringConsistency(t *testing.T) {
 	n := &numberRule{}
-	if !n.Passes(fakeField{val: rvOf(" 42 ")}) {
+	if !n.Passes(&fakeField{val: rvOf(" 42 ")}) {
 		t.Error(`number " 42 " should pass: trimmed like numeric`)
 	}
-	if !n.Passes(fakeField{val: rvOf("18446744073709551615")}) {
+	if !n.Passes(&fakeField{val: rvOf("18446744073709551615")}) {
 		t.Error("number accepts uint64-range strings like native uint64 values")
 	}
-	if n.Passes(fakeField{val: rvOf("18446744073709551616")}) {
+	if n.Passes(&fakeField{val: rvOf("18446744073709551616")}) {
 		t.Error("number rejects beyond-uint64 strings")
 	}
 }
@@ -69,12 +69,12 @@ func TestNumberStringConsistency(t *testing.T) {
 func TestNumericStrictDecimal(t *testing.T) {
 	num := &numericRule{}
 	for _, s := range []string{"1_000", "0x1F", "0x1p4", "1e3", "1E-2", ".", "5.", ".5", "+"} {
-		if num.Passes(fakeField{val: rvOf(s)}) {
+		if num.Passes(&fakeField{val: rvOf(s)}) {
 			t.Errorf("numeric %q should fail under strict decimal parsing", s)
 		}
 	}
 	for _, s := range []string{"42", "-7", "+3", "3.14", " 10 ", "-0.5"} {
-		if !num.Passes(fakeField{val: rvOf(s)}) {
+		if !num.Passes(&fakeField{val: rvOf(s)}) {
 			t.Errorf("numeric %q should pass", s)
 		}
 	}
@@ -83,12 +83,12 @@ func TestNumericStrictDecimal(t *testing.T) {
 func TestNumberRejectsNonInteger(t *testing.T) {
 	n := &numberRule{}
 	for _, v := range []any{"  ", "1e3", "3.0", "0x1F", 3.5} {
-		if n.Passes(fakeField{val: rvOf(v)}) {
+		if n.Passes(&fakeField{val: rvOf(v)}) {
 			t.Errorf("number %v should fail", v)
 		}
 	}
 	for _, v := range []any{float64(3.0), 42, "42", "-7"} {
-		if !n.Passes(fakeField{val: rvOf(v)}) {
+		if !n.Passes(&fakeField{val: rvOf(v)}) {
 			t.Errorf("number %v should pass", v)
 		}
 	}
@@ -121,7 +121,7 @@ func TestMin(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := r.Passes(fakeField{name: "x", val: rvOf(c.val), attrs: c.attrs})
+			got := r.Passes(&fakeField{name: "x", val: rvOf(c.val), attrs: c.attrs})
 			if got != c.want {
 				t.Errorf("Passes(%v, %v) = %v, want %v", c.val, c.attrs, got, c.want)
 			}
@@ -153,7 +153,7 @@ func TestMax(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := r.Passes(fakeField{name: "x", val: rvOf(c.val), attrs: c.attrs})
+			got := r.Passes(&fakeField{name: "x", val: rvOf(c.val), attrs: c.attrs})
 			if got != c.want {
 				t.Errorf("Passes(%v, %v) = %v, want %v", c.val, c.attrs, got, c.want)
 			}
@@ -187,7 +187,7 @@ func TestBetween(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := r.Passes(fakeField{name: "x", val: rvOf(c.val), attrs: c.attrs})
+			got := r.Passes(&fakeField{name: "x", val: rvOf(c.val), attrs: c.attrs})
 			if got != c.want {
 				t.Errorf("Passes(%v, %v) = %v, want %v", c.val, c.attrs, got, c.want)
 			}
@@ -218,7 +218,7 @@ func TestGt(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := r.Passes(fakeField{name: "x", val: rvOf(c.val), attrs: c.attrs})
+			got := r.Passes(&fakeField{name: "x", val: rvOf(c.val), attrs: c.attrs})
 			if got != c.want {
 				t.Errorf("Passes(%v, %v) = %v, want %v", c.val, c.attrs, got, c.want)
 			}
@@ -247,7 +247,7 @@ func TestGte(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := r.Passes(fakeField{name: "x", val: rvOf(c.val), attrs: c.attrs})
+			got := r.Passes(&fakeField{name: "x", val: rvOf(c.val), attrs: c.attrs})
 			if got != c.want {
 				t.Errorf("Passes(%v, %v) = %v, want %v", c.val, c.attrs, got, c.want)
 			}
@@ -276,7 +276,7 @@ func TestLt(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := r.Passes(fakeField{name: "x", val: rvOf(c.val), attrs: c.attrs})
+			got := r.Passes(&fakeField{name: "x", val: rvOf(c.val), attrs: c.attrs})
 			if got != c.want {
 				t.Errorf("Passes(%v, %v) = %v, want %v", c.val, c.attrs, got, c.want)
 			}
@@ -305,7 +305,7 @@ func TestLte(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := r.Passes(fakeField{name: "x", val: rvOf(c.val), attrs: c.attrs})
+			got := r.Passes(&fakeField{name: "x", val: rvOf(c.val), attrs: c.attrs})
 			if got != c.want {
 				t.Errorf("Passes(%v, %v) = %v, want %v", c.val, c.attrs, got, c.want)
 			}
@@ -336,7 +336,7 @@ func TestLen(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := r.Passes(fakeField{name: "x", val: rvOf(c.val), attrs: c.attrs})
+			got := r.Passes(&fakeField{name: "x", val: rvOf(c.val), attrs: c.attrs})
 			if got != c.want {
 				t.Errorf("Passes(%v, %v) = %v, want %v", c.val, c.attrs, got, c.want)
 			}
@@ -364,7 +364,7 @@ func TestSize(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := r.Passes(fakeField{name: "x", val: rvOf(c.val), attrs: c.attrs})
+			got := r.Passes(&fakeField{name: "x", val: rvOf(c.val), attrs: c.attrs})
 			if got != c.want {
 				t.Errorf("Passes(%v, %v) = %v, want %v", c.val, c.attrs, got, c.want)
 			}
@@ -395,7 +395,7 @@ func TestDigits(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := r.Passes(fakeField{name: "x", val: rvOf(c.val), attrs: c.attrs})
+			got := r.Passes(&fakeField{name: "x", val: rvOf(c.val), attrs: c.attrs})
 			if got != c.want {
 				t.Errorf("Passes(%v, %v) = %v, want %v", c.val, c.attrs, got, c.want)
 			}
@@ -424,7 +424,7 @@ func TestNumeric(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := r.Passes(fakeField{name: "x", val: rvOf(c.val)})
+			got := r.Passes(&fakeField{name: "x", val: rvOf(c.val)})
 			if got != c.want {
 				t.Errorf("Passes(%v) = %v, want %v", c.val, got, c.want)
 			}
@@ -451,7 +451,7 @@ func TestNumber(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := r.Passes(fakeField{name: "x", val: rvOf(c.val)})
+			got := r.Passes(&fakeField{name: "x", val: rvOf(c.val)})
 			if got != c.want {
 				t.Errorf("Passes(%v) = %v, want %v", c.val, got, c.want)
 			}
@@ -482,7 +482,7 @@ func TestBoolean(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := r.Passes(fakeField{name: "x", val: rvOf(c.val)})
+			got := r.Passes(&fakeField{name: "x", val: rvOf(c.val)})
 			if got != c.want {
 				t.Errorf("Passes(%v) = %v, want %v", c.val, got, c.want)
 			}
@@ -520,33 +520,33 @@ func TestSizeStringSemantics(t *testing.T) {
 	ctx := context.Background()
 
 	// the README password shape: min:8 must reject a short numeric password
-	pw := Map(map[string]any{"pwd": "999"}, map[string]string{"pwd": "required && min:8"})
+	pw := MustMap(map[string]any{"pwd": "999"}, map[string]string{"pwd": "required && min:8"})
 	pw.Validate(ctx)
 	if !pw.Errors().Has("pwd") {
 		t.Error(`min:8 on "999" must fail by rune count — numeric content must not bypass a length constraint`)
 	}
 
 	// form-style numeric field: numeric && gte:18 compares by value
-	age := Map(map[string]any{"age": "30"}, map[string]string{"age": "numeric && gte:18"})
+	age := MustMap(map[string]any{"age": "30"}, map[string]string{"age": "numeric && gte:18"})
 	age.Validate(ctx)
 	if age.Fails() {
 		t.Errorf(`numeric && gte:18 on "30" must compare numerically, got %v`, age.Errors().All())
 	}
-	young := Map(map[string]any{"age": "9"}, map[string]string{"age": "numeric && gte:18"})
+	young := MustMap(map[string]any{"age": "9"}, map[string]string{"age": "numeric && gte:18"})
 	young.Validate(ctx)
 	if !young.Errors().Has("age") {
 		t.Error(`numeric && gte:18 on "9" must fail numerically (9 < 18), not pass by length`)
 	}
 
 	// the hint applies only on the AND spine, not inside || or !
-	or := Map(map[string]any{"v": "999"}, map[string]string{"v": "(numeric || alpha) && min:8"})
+	or := MustMap(map[string]any{"v": "999"}, map[string]string{"v": "(numeric || alpha) && min:8"})
 	or.Validate(ctx)
 	if !or.Errors().Has("v") {
 		t.Error("a numeric leaf inside || must not flip min to numeric comparison")
 	}
 
 	// multibyte strings count runes, not bytes
-	uni := Map(map[string]any{"name": "héllo"}, map[string]string{"name": "len:5"})
+	uni := MustMap(map[string]any{"name": "héllo"}, map[string]string{"name": "len:5"})
 	uni.Validate(ctx)
 	if uni.Fails() {
 		t.Errorf("len counts runes: héllo is 5, got %v", uni.Errors().All())
@@ -558,31 +558,31 @@ func TestSizeIntegerPrecision(t *testing.T) {
 	ctx := context.Background()
 	const big = int64(9007199254740993) // 2^53 + 1: rounds to 2^53 in float64
 
-	eq := Map(map[string]any{"n": big}, map[string]string{"n": "gte:9007199254740993"})
+	eq := MustMap(map[string]any{"n": big}, map[string]string{"n": "gte:9007199254740993"})
 	eq.Validate(ctx)
 	if eq.Fails() {
 		t.Errorf("gte at 2^53+1 must compare exactly, got %v", eq.Errors().All())
 	}
-	lt := Map(map[string]any{"n": big - 1}, map[string]string{"n": "lt:9007199254740993"})
+	lt := MustMap(map[string]any{"n": big - 1}, map[string]string{"n": "lt:9007199254740993"})
 	lt.Validate(ctx)
 	if lt.Fails() {
 		t.Errorf("lt at 2^53 boundary must compare exactly, got %v", lt.Errors().All())
 	}
-	gt := Map(map[string]any{"n": big}, map[string]string{"n": "gt:9007199254740992"})
+	gt := MustMap(map[string]any{"n": big}, map[string]string{"n": "gt:9007199254740992"})
 	gt.Validate(ctx)
 	if gt.Fails() {
 		t.Errorf("gt at 2^53 boundary must compare exactly, got %v", gt.Errors().All())
 	}
 
 	// uint64 above MaxInt64 with an exact threshold
-	u := Map(map[string]any{"n": uint64(18446744073709551615)}, map[string]string{"n": "gte:18446744073709551615"})
+	u := MustMap(map[string]any{"n": uint64(18446744073709551615)}, map[string]string{"n": "gte:18446744073709551615"})
 	u.Validate(ctx)
 	if u.Fails() {
 		t.Errorf("MaxUint64 gte:MaxUint64 must pass exactly, got %v", u.Errors().All())
 	}
 
 	// numeric strings under the hint also compare exactly
-	s := Map(map[string]any{"n": "9007199254740993"}, map[string]string{"n": "numeric && gt:9007199254740992"})
+	s := MustMap(map[string]any{"n": "9007199254740993"}, map[string]string{"n": "numeric && gt:9007199254740992"})
 	s.Validate(ctx)
 	if s.Fails() {
 		t.Errorf("hinted numeric string must compare exactly above 2^53, got %v", s.Errors().All())

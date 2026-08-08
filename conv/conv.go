@@ -1,5 +1,5 @@
-// Package conv provides fast type conversions. Overflow and non-finite (NaN/Inf)
-// inputs error; a float-to-integer conversion truncates toward zero.
+// Package conv converts common Go values. Overflow and non-finite numbers
+// return errors; float-to-integer conversion truncates toward zero.
 package conv
 
 import (

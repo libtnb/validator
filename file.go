@@ -30,14 +30,12 @@ var (
 	_ argChecker = (*filemaxRule)(nil)
 )
 
-// extRule: the filename (a *multipart.FileHeader's or a string) has one of the
-// listed extensions (ext:jpg,png; leading dots and case are ignored).
 type extRule struct{}
 
 func (r *extRule) Signature() string { return "ext" }
 
-func (r *extRule) Passes(f Field) bool {
-	rv := f.Val()
+func (r *extRule) Passes(f *Field) bool {
+	rv := f.Reflect()
 	if isEmptyV(rv) {
 		return true
 	}
@@ -60,14 +58,12 @@ func (r *extRule) Passes(f Field) bool {
 
 func (r *extRule) Message() string { return "The {field} must be a file of type: {0+}." }
 
-// mimetypesRule: an uploaded file's SNIFFED content type (first 512 bytes, not
-// the client-declared header) matches one of the args; "image/*" wildcards work.
 type mimetypesRule struct{}
 
 func (r *mimetypesRule) Signature() string { return "mimetypes" }
 
-func (r *mimetypesRule) Passes(f Field) bool {
-	rv := f.Val()
+func (r *mimetypesRule) Passes(f *Field) bool {
+	rv := f.Reflect()
 	if isEmptyV(rv) {
 		return true
 	}
@@ -84,12 +80,11 @@ func (r *mimetypesRule) Passes(f Field) bool {
 
 func (r *mimetypesRule) Message() string { return "The {field} must be a file of type: {0+}." }
 
-// fileminRule: an uploaded file's size is at least the arg (filemin:1kb).
 type fileminRule struct{}
 
 func (r *fileminRule) Signature() string { return "filemin" }
 
-func (r *fileminRule) Passes(f Field) bool {
+func (r *fileminRule) Passes(f *Field) bool {
 	return fileSizeCompare(f, func(size, n int64) bool { return size >= n })
 }
 
@@ -97,12 +92,11 @@ func (r *fileminRule) CheckArgs(args []string) error { return checkByteSizeArg(a
 
 func (r *fileminRule) Message() string { return "The {field} file must be at least {0}." }
 
-// filemaxRule: an uploaded file's size is at most the arg (filemax:10mb).
 type filemaxRule struct{}
 
 func (r *filemaxRule) Signature() string { return "filemax" }
 
-func (r *filemaxRule) Passes(f Field) bool {
+func (r *filemaxRule) Passes(f *Field) bool {
 	return fileSizeCompare(f, func(size, n int64) bool { return size <= n })
 }
 
@@ -127,8 +121,8 @@ func fileHeaderValue(rv reflect.Value) (*multipart.FileHeader, bool) {
 }
 
 // fileSizeCompare: empty passes (omitempty); a non-file value or bad arg fails closed.
-func fileSizeCompare(f Field, ok func(size, n int64) bool) bool {
-	rv := f.Val()
+func fileSizeCompare(f *Field, ok func(size, n int64) bool) bool {
+	rv := f.Reflect()
 	if isEmptyV(rv) {
 		return true
 	}

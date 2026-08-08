@@ -31,7 +31,7 @@ func TestUnique(t *testing.T) {
 		{"abc", false},
 	}
 	for _, c := range cases {
-		if got := r.Passes(fakeField{val: reflect.ValueOf(c.val)}); got != c.want {
+		if got := r.Passes(&fakeField{val: reflect.ValueOf(c.val)}); got != c.want {
 			t.Errorf("unique(%v)=%v want %v", c.val, got, c.want)
 		}
 	}

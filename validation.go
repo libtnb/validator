@@ -2,6 +2,7 @@ package validator
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"runtime"
 	"slices"
@@ -10,24 +11,25 @@ import (
 	"sync/atomic"
 )
 
-var validationPool = sync.Pool{New: func() any { return &validation{} }}
+var validationPool = sync.Pool{New: func() any { return &Validation{} }}
 
-var _ Validation = (*validation)(nil)
-
-type validation struct {
+// Validation is one mutable validation configuration and its eventual result.
+// It is not safe for concurrent use. Configure it before Validate; mutations
+// after validation return ErrValidated.
+type Validation struct {
 	validator *Validator
-	// ssVal/ssPlan: struct source; src: map/JSON sources. A Var value lives
+	// ssVal/ssPlan: struct source; src: map/JSON sources. A Value input lives
 	// inline in ssVal (isVar).
 	src        source
 	ssVal      reflect.Value
 	ssPlan     *structPlan
-	srcPlan    *mapPlan // precompiled rules-map plan (Map/JSON/URLValues/Var)
+	srcPlan    *mapPlan // precompiled rules-map plan (Map/JSON/Values/Value)
 	rules      map[string]string
 	filters    map[string]string
 	filtered   map[string]any
 	filterErrs map[string]string // field -> failed-filter diagnostic
-	errors     validationErrors
-	decodeErr  string
+	errors     Errors
+	runtimeErr error
 	names      []string
 
 	rulesShared     bool // aliases a cached plan map; copy-on-write before mutation
@@ -36,49 +38,43 @@ type validation struct {
 	isVar           bool
 }
 
-func newValidation(v *Validator, src source) *validation {
-	vd := &validation{validator: v, src: src}
-	vd.errors.v = v
-	return vd
-}
-
-func (vd *validation) reset() {
-	items := vd.errors.items[:0]
-	bases := vd.errors.bases[:0]
-	names := vd.names[:0]
-	*vd = validation{}
-	vd.errors.items = items
-	vd.errors.bases = bases
-	vd.names = names
-}
-
-// Bind writes the original (unfiltered) data into ptr; no Validate required.
-func (vd *validation) Bind(ptr any) error { return vd.bindInto(ptr, false) }
-
-// SafeBind writes the filtered data into ptr after a successful Validate.
-func (vd *validation) SafeBind(ptr any) error {
-	if !vd.validated {
-		return errNotValidated
+// Bind atomically writes the original input into dst. T must be a non-pointer
+// struct; on any conversion failure dst is left unchanged.
+func (vd *Validation) Bind[T any](dst *T) error {
+	if _, err := validationStructType[T]("Bind"); err != nil || dst == nil {
+		return ErrBindTarget
 	}
-	if vd.Fails() {
-		return errValidationFailed
-	}
-	return vd.bindInto(ptr, true)
+	return vd.bindInto(reflect.ValueOf(dst), false)
 }
 
-// Validate is idempotent; fields run sorted for deterministic output.
-func (vd *validation) Validate(ctx context.Context) {
+// ValidateAs validates and atomically writes filtered input into dst. It wraps
+// ErrValidationFailed on validation errors and never partially mutates dst.
+func (vd *Validation) ValidateAs[T any](ctx context.Context, dst *T) error {
+	if _, err := validationStructType[T]("ValidateAs"); err != nil || dst == nil {
+		return ErrBindTarget
+	}
+	if err := vd.Validate(ctx); err != nil {
+		if vd.runtimeErr != nil {
+			return err
+		}
+		return errors.Join(ErrValidationFailed, err)
+	}
+	return vd.bindInto(reflect.ValueOf(dst), true)
+}
+
+// Validate freezes the Validation on its first non-nil-context call and caches
+// that result, including cancellation. Fields run in sorted order.
+func (vd *Validation) Validate(ctx context.Context) error {
+	if ctx == nil {
+		return ErrNilContext
+	}
 	if vd.validated {
-		return
+		return vd.Err()
 	}
 	vd.validated = true
-	if ctx == nil {
-		ctx = context.Background()
-	}
-
-	if vd.decodeErr != "" {
-		vd.errors.add(vd.diag("", vd.decodeErr), "")
-		return
+	if err := context.Cause(ctx); err != nil {
+		vd.runtimeErr = err
+		return err
 	}
 
 	vd.prepareFilters() // serial: goroutines below only read vd.filtered
@@ -96,12 +92,12 @@ func (vd *validation) Validate(ctx context.Context) {
 	// Fast paths: unmodified sources run their precompiled plans.
 	if vd.rulesShared {
 		if vd.ssPlan != nil {
-			vd.runPlan(vd.ssPlan.execPlan, ctx)
-			return
+			vd.runPlan(ctx, vd.ssPlan.execPlan)
+			return vd.Err()
 		}
 		if vd.srcPlan != nil {
-			vd.runPlan(vd.srcPlan.plan, ctx)
-			return
+			vd.runPlan(ctx, vd.srcPlan.plan)
+			return vd.Err()
 		}
 	}
 
@@ -119,35 +115,66 @@ func (vd *validation) Validate(ctx context.Context) {
 
 	threshold := vd.validator.parallel
 	if threshold > 0 && len(names) >= threshold {
-		vd.validateParallel(names, ctx)
-		return
+		vd.validateParallel(ctx, names)
+		return vd.Err()
 	}
 
 	for _, name := range names {
 		before := len(vd.errors.items)
-		vd.errors.items = vd.evalField(name, vd.rules[name], ctx, vd.errors.items)
+		var err error
+		vd.errors.items, err = vd.evalField(ctx, name, vd.rules[name], vd.errors.items)
+		if err != nil {
+			vd.runtimeErr = errors.Join(vd.runtimeErr, err)
+		}
 		for j := before; j < len(vd.errors.items); j++ {
 			vd.errors.bases = appendGrown(vd.errors.bases, name)
 		}
 	}
+	return vd.Err()
 }
 
-func (vd *validation) Errors() Errors { return &vd.errors }
+// Errors returns the validation's read-only error collection.
+func (vd *Validation) Errors() *Errors { return &vd.errors }
 
 // Err returns a literal nil on success (no typed-nil trap), else the errors.
-func (vd *validation) Err() error {
-	if vd.Fails() {
-		return &vd.errors
+func (vd *Validation) Err() error {
+	var validationErr error
+	if len(vd.errors.items) > 0 {
+		validationErr = &vd.errors
+	}
+	return errors.Join(vd.runtimeErr, validationErr)
+}
+
+// Fails reports whether validation failed or could not be completed.
+func (vd *Validation) Fails() bool {
+	return vd.runtimeErr != nil || len(vd.errors.items) > 0
+}
+
+func (vd *Validation) reset() {
+	items := vd.errors.items[:0]
+	bases := vd.errors.bases[:0]
+	names := vd.names[:0]
+	*vd = Validation{}
+	vd.errors.items = items
+	vd.errors.bases = bases
+	vd.names = names
+}
+
+func (vd *Validation) ensureMutable() error {
+	if vd.validated {
+		return ErrValidated
 	}
 	return nil
 }
 
-func (vd *validation) Fails() bool { return len(vd.errors.items) > 0 }
-
 // validateParallel: bounded workers pull fields off an atomic counter into
 // disjoint per-field result slots (append-unsafe shared store), merged sorted.
-func (vd *validation) validateParallel(names []string, ctx context.Context) {
-	results := make([][]FieldError, len(names))
+func (vd *Validation) validateParallel(ctx context.Context, names []string) {
+	type result struct {
+		fields []FieldError
+		err    error
+	}
+	results := make([]result, len(names))
 	var next atomic.Int64
 	runWorkers(len(names), func() {
 		for {
@@ -155,35 +182,40 @@ func (vd *validation) validateParallel(names []string, ctx context.Context) {
 			if i >= len(names) {
 				return
 			}
-			results[i] = vd.evalField(names[i], vd.rules[names[i]], ctx, nil)
+			results[i].fields, results[i].err = vd.evalField(ctx, names[i], vd.rules[names[i]], nil)
 		}
 	})
-	for i, errs := range results {
-		for _, e := range errs {
+	for i, result := range results {
+		vd.runtimeErr = errors.Join(vd.runtimeErr, result.err)
+		for _, e := range result.fields {
 			vd.errors.add(e, names[i])
 		}
 	}
 }
 
-// runPlan executes the precompiled struct fast path (plan is name-sorted).
-func (vd *validation) runPlan(plan []compiledField, ctx context.Context) {
+func (vd *Validation) runPlan(ctx context.Context, plan []compiledField) {
 	threshold := vd.validator.parallel
 	if threshold > 0 && len(plan) >= threshold {
-		vd.runPlanParallel(plan, ctx)
+		vd.runPlanParallel(ctx, plan)
 		return
 	}
 	for _, cf := range plan {
 		before := len(vd.errors.items)
-		vd.errors.items = vd.evalCompiledField(cf, ctx, vd.errors.items)
+		var err error
+		vd.errors.items, err = vd.evalCompiledField(ctx, cf, vd.errors.items)
+		vd.runtimeErr = errors.Join(vd.runtimeErr, err)
 		for j := before; j < len(vd.errors.items); j++ {
 			vd.errors.bases = appendGrown(vd.errors.bases, cf.name)
 		}
 	}
 }
 
-// runPlanParallel: bounded workers over the plan, merged in plan order.
-func (vd *validation) runPlanParallel(plan []compiledField, ctx context.Context) {
-	results := make([][]FieldError, len(plan))
+func (vd *Validation) runPlanParallel(ctx context.Context, plan []compiledField) {
+	type result struct {
+		fields []FieldError
+		err    error
+	}
+	results := make([]result, len(plan))
 	var next atomic.Int64
 	runWorkers(len(plan), func() {
 		for {
@@ -191,11 +223,12 @@ func (vd *validation) runPlanParallel(plan []compiledField, ctx context.Context)
 			if i >= len(plan) {
 				return
 			}
-			results[i] = vd.evalCompiledField(plan[i], ctx, nil)
+			results[i].fields, results[i].err = vd.evalCompiledField(ctx, plan[i], nil)
 		}
 	})
-	for i, errs := range results {
-		for _, e := range errs {
+	for i, result := range results {
+		vd.runtimeErr = errors.Join(vd.runtimeErr, result.err)
+		for _, e := range result.fields {
 			vd.errors.add(e, plan[i].name)
 		}
 	}
@@ -214,4 +247,10 @@ func runWorkers(n int, work func()) {
 	}
 	work()
 	wg.Wait()
+}
+
+func newValidation(v *Validator, src source) *Validation {
+	vd := &Validation{validator: v, src: src}
+	vd.errors.v = v
+	return vd
 }

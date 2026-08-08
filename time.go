@@ -24,23 +24,21 @@ var (
 	_ Rule = (*beforeOrEqualRule)(nil)
 )
 
-// afterRule: value is a date after the arg (sibling field first, else literal).
 type afterRule struct{}
 
 func (r *afterRule) Signature() string { return "after" }
 
-func (r *afterRule) Passes(f Field) bool {
+func (r *afterRule) Passes(f *Field) bool {
 	return timeCompare(f, func(c int) bool { return c > 0 })
 }
 
 func (r *afterRule) Message() string { return "The {field} must be a date after {0}." }
 
-// afterOrEqualRule: value is a date at or after the arg.
 type afterOrEqualRule struct{}
 
 func (r *afterOrEqualRule) Signature() string { return "after_or_equal" }
 
-func (r *afterOrEqualRule) Passes(f Field) bool {
+func (r *afterOrEqualRule) Passes(f *Field) bool {
 	return timeCompare(f, func(c int) bool { return c >= 0 })
 }
 
@@ -48,23 +46,21 @@ func (r *afterOrEqualRule) Message() string {
 	return "The {field} must be a date after or equal to {0}."
 }
 
-// beforeRule: value is a date before the arg.
 type beforeRule struct{}
 
 func (r *beforeRule) Signature() string { return "before" }
 
-func (r *beforeRule) Passes(f Field) bool {
+func (r *beforeRule) Passes(f *Field) bool {
 	return timeCompare(f, func(c int) bool { return c < 0 })
 }
 
 func (r *beforeRule) Message() string { return "The {field} must be a date before {0}." }
 
-// beforeOrEqualRule: value is a date at or before the arg.
 type beforeOrEqualRule struct{}
 
 func (r *beforeOrEqualRule) Signature() string { return "before_or_equal" }
 
-func (r *beforeOrEqualRule) Passes(f Field) bool {
+func (r *beforeOrEqualRule) Passes(f *Field) bool {
 	return timeCompare(f, func(c int) bool { return c <= 0 })
 }
 
@@ -77,8 +73,8 @@ func (r *beforeOrEqualRule) Message() string {
 // user-controlled, so a sibling lookup first would let an attacker shadow a
 // hard-coded cutoff ("2026-01-01": ...) — otherwise it resolves as a sibling
 // field. Empty self passes (omitempty); an unparseable side fails closed.
-func timeCompare(f Field, ok func(c int) bool) bool {
-	rv := f.Val()
+func timeCompare(f *Field, ok func(c int) bool) bool {
+	rv := f.Reflect()
 	if isEmptyV(rv) {
 		return true
 	}

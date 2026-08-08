@@ -1,7 +1,6 @@
 package validator
 
 import (
-	"errors"
 	"reflect"
 	"testing"
 
@@ -13,33 +12,33 @@ type passRule struct {
 	pass bool
 }
 
-func (r passRule) Signature() string { return r.sig }
-func (r passRule) Passes(Field) bool { return r.pass }
-func (r passRule) Message() string   { return "The {field} failed " + r.sig + "." }
+func (r passRule) Signature() string  { return r.sig }
+func (r passRule) Passes(*Field) bool { return r.pass }
+func (r passRule) Message() string    { return "The {field} failed " + r.sig + "." }
 
 type hasRule struct{}
 
 func (hasRule) Signature() string { return "has" }
-func (hasRule) Passes(f Field) bool {
+func (hasRule) Passes(f *Field) bool {
 	a := f.Attrs()
 	return len(a) > 0 && a[0] == "yes"
 }
 func (hasRule) Message() string { return "The {field} needs yes." }
 
-// okRule is an ErrorRule that passes only for "ok".
+// okRule is a FallibleRule that passes only for "ok".
 type okRule struct{}
 
 func (okRule) Signature() string { return "ekey" }
-func (okRule) PassesE(f Field) error {
-	if f.Val().IsValid() && f.Val().Interface() == "ok" {
-		return nil
+func (okRule) Validate(f *Field) (bool, error) {
+	if f.Reflect().IsValid() && f.Reflect().Interface() == "ok" {
+		return true, nil
 	}
-	return errors.New("The {field} must be ok.")
+	return false, nil
 }
 func (okRule) Message() string { return "The {field} ekey failed." }
 
 func testResolver() resolver {
-	return func(sig string) (Rule, ErrorRule, bool) {
+	return func(sig string) (Rule, FallibleRule, bool) {
 		switch sig {
 		case "t":
 			return passRule{sig: "t", pass: true}, nil, true
@@ -53,6 +52,24 @@ func testResolver() resolver {
 			return nil, nil, false
 		}
 	}
+}
+
+func fast(t *testing.T, compiled *compiled, field *Field) bool {
+	t.Helper()
+	passed, err := compiled.Fast(field)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return passed
+}
+
+func diag(t *testing.T, compiled *compiled, field *Field) (bool, []FieldError) {
+	t.Helper()
+	passed, fields, err := compiled.Diag(field, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return passed, fields
 }
 
 func mustCompile(t *testing.T, expr string) *compiled {
@@ -86,45 +103,45 @@ func TestCompileFastLogic(t *testing.T) {
 		{"!f && t", true},     // (!f)&&t
 		{"!(f || f)", true},
 	}
-	f := fakeField{name: "x"}
+	f := &fakeField{name: "x"}
 	for _, c := range cases {
-		if got := mustCompile(t, c.expr).Fast(f); got != c.want {
+		if got := fast(t, mustCompile(t, c.expr), f); got != c.want {
 			t.Errorf("Fast(%q) = %v want %v", c.expr, got, c.want)
 		}
 	}
 }
 
 func TestCompileArgBinding(t *testing.T) {
-	f := fakeField{name: "x"}
-	if !mustCompile(t, "has:yes").Fast(f) {
+	f := &fakeField{name: "x"}
+	if !fast(t, mustCompile(t, "has:yes"), f) {
 		t.Error(`has:yes should pass`)
 	}
-	if mustCompile(t, "has:no").Fast(f) {
+	if fast(t, mustCompile(t, "has:no"), f) {
 		t.Error(`has:no should fail`)
 	}
 }
 
-func TestCompileErrorRule(t *testing.T) {
-	if !mustCompile(t, "ekey").Fast(fakeField{name: "x", val: reflect.ValueOf("ok")}) {
+func TestCompileFallibleRule(t *testing.T) {
+	if !fast(t, mustCompile(t, "ekey"), &fakeField{name: "x", val: reflect.ValueOf("ok")}) {
 		t.Error("ekey should pass for ok")
 	}
-	ok, errs := mustCompile(t, "ekey").Diag(fakeField{name: "x", val: reflect.ValueOf("bad")}, nil)
+	ok, errs := diag(t, mustCompile(t, "ekey"), &fakeField{name: "x", val: reflect.ValueOf("bad")})
 	// dsl emits the raw template; root resolves placeholders.
-	if ok || len(errs) != 1 || errs[0].Message != "The {field} must be ok." {
+	if ok || len(errs) != 1 || errs[0].Message != "The {field} ekey failed." {
 		t.Errorf("ekey diag = %v %v", ok, errs)
 	}
 }
 
 func TestCompileDiagAggregation(t *testing.T) {
-	f := fakeField{name: "email"}
+	f := &fakeField{name: "email"}
 
-	ok, errs := mustCompile(t, "f && f").Diag(f, nil)
+	ok, errs := diag(t, mustCompile(t, "f && f"), f)
 	if ok || len(errs) != 2 {
 		t.Errorf("'f && f' diag = %v, %d errs want false,2", ok, len(errs))
 	}
 
 	// OR, both failing: synthesized parent message plus each branch.
-	ok, errs = mustCompile(t, "f || f").Diag(f, nil)
+	ok, errs = diag(t, mustCompile(t, "f || f"), f)
 	if ok || len(errs) != 3 {
 		t.Errorf("'f || f' diag = %v, %d errs want false,3", ok, len(errs))
 	}
@@ -133,11 +150,11 @@ func TestCompileDiagAggregation(t *testing.T) {
 	}
 
 	// success path allocates no errors: nil slice, not empty.
-	if ok, errs := mustCompile(t, "t && t").Diag(f, nil); !ok || errs != nil {
+	if ok, errs := diag(t, mustCompile(t, "t && t"), f); !ok || errs != nil {
 		t.Errorf("'t && t' diag = %v, %v want true,nil", ok, errs)
 	}
 
-	_, errs = mustCompile(t, "f").Diag(f, nil)
+	_, errs = diag(t, mustCompile(t, "f"), f)
 	if len(errs) != 1 || errs[0].Message != "The {field} failed f." {
 		t.Errorf("raw template = %q", errs[0].Message)
 	}
@@ -157,14 +174,14 @@ func TestCompileFailFastUnknownRule(t *testing.T) {
 
 type countRule struct{ calls *int }
 
-func (countRule) Signature() string   { return "cf" }
-func (r countRule) Passes(Field) bool { *r.calls++; return false }
-func (countRule) Message() string     { return "The {field} cf failed." }
+func (countRule) Signature() string    { return "cf" }
+func (r countRule) Passes(*Field) bool { *r.calls++; return false }
+func (countRule) Message() string      { return "The {field} cf failed." }
 
-// TestOrDiagEvaluatesEachBranchOnce: diag OR evaluates each branch once (ErrorRules may hit a DB).
+// TestOrDiagEvaluatesEachBranchOnce guards expensive rule evaluation.
 func TestOrDiagEvaluatesEachBranchOnce(t *testing.T) {
 	var calls int
-	res := func(sig string) (Rule, ErrorRule, bool) {
+	res := func(sig string) (Rule, FallibleRule, bool) {
 		if sig == "cf" {
 			return countRule{calls: &calls}, nil, true
 		}
@@ -179,7 +196,7 @@ func TestOrDiagEvaluatesEachBranchOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	calls = 0
-	c.Diag(fakeField{name: "x"}, nil)
+	_, _, _ = c.Diag(&fakeField{name: "x"}, nil)
 	if calls != 2 {
 		t.Errorf("each OR branch should be evaluated exactly once (2 total), got %d", calls)
 	}
@@ -188,7 +205,7 @@ func TestOrDiagEvaluatesEachBranchOnce(t *testing.T) {
 // TestAndFastShortCircuitsDiagExhaustive: && Fast short-circuits, Diag is exhaustive so Errors() reports every failure.
 func TestAndFastShortCircuitsDiagExhaustive(t *testing.T) {
 	var calls int
-	res := func(sig string) (Rule, ErrorRule, bool) {
+	res := func(sig string) (Rule, FallibleRule, bool) {
 		if sig == "cf" {
 			return countRule{calls: &calls}, nil, true
 		}
@@ -204,12 +221,12 @@ func TestAndFastShortCircuitsDiagExhaustive(t *testing.T) {
 	}
 
 	calls = 0
-	c.Fast(fakeField{name: "x"})
+	_, _ = c.Fast(&fakeField{name: "x"})
 	if calls != 1 {
 		t.Errorf("Fast '&&' should short-circuit after first false (1 call), got %d", calls)
 	}
 	calls = 0
-	c.Diag(fakeField{name: "x"}, nil)
+	_, _, _ = c.Diag(&fakeField{name: "x"}, nil)
 	if calls != 2 {
 		t.Errorf("Diag '&&' should evaluate both sides once (2 calls), got %d", calls)
 	}
@@ -218,8 +235,8 @@ func TestAndFastShortCircuitsDiagExhaustive(t *testing.T) {
 // TestFastWrapperPathAllocs: a Field lacking WithArgs costs at most one argsField wrapper alloc per leaf.
 func TestFastWrapperPathAllocs(t *testing.T) {
 	c := mustCompile(t, "has:yes")
-	var ext Field = fakeField{name: "x"} // no WithArgs -> wrapper path
-	allocs := testing.AllocsPerRun(100, func() { _ = c.Fast(ext) })
+	ext := &fakeField{name: "x"}
+	allocs := testing.AllocsPerRun(100, func() { _, _ = c.Fast(ext) })
 	if allocs > 1 {
 		t.Errorf("wrapper path allocated %v per leaf, want <=1 (regression means extra boxing)", allocs)
 	}

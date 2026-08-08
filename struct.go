@@ -1,6 +1,7 @@
 package validator
 
 import (
+	"errors"
 	"reflect"
 	"slices"
 	"sort"
@@ -24,8 +25,7 @@ type structPlan struct {
 	entries  []fieldPlan
 	byName   map[string]int
 	rules    map[string]string // field->expression; copy-on-write before mutation
-	execPlan []compiledField   // name-sorted; invalidated with expr caches on Register*
-	gen      uint64            // registry generation the execPlan closures bound to
+	execPlan []compiledField   // name-sorted
 
 	ambiguous map[string]int // build-time: name -> depth of an ambiguous collision
 }
@@ -102,7 +102,7 @@ type compiledField struct {
 	container *compiled // value rules (nil if none)
 	element   *compiled // per-element dive rules (nil if no dive)
 	hasDive   bool
-	buildErr  string // non-empty: split/compile failed, reported verbatim at eval time
+	buildErr  error
 }
 
 // structSource is the reflection-backed source for a struct value (nil-pointer safe).
@@ -128,36 +128,16 @@ func (s structSource) lookup(name string) (reflect.Value, bool) {
 }
 
 func (v *Validator) getStructPlan(t reflect.Type) *structPlan {
-	// A plan's execPlan closures bind the registry state at build time; the gen
-	// stamp lets every reader reject a plan a concurrent Register* has obsoleted
-	// (mirrors the mapPlan cache) — including one a straddling builder published
-	// into the map before it could evict its own stale entry.
 	if c, ok := v.typeCache.Load(t); ok {
-		sp := c.(*structPlan)
-		if sp.gen == v.gen.Load() {
-			return sp
-		}
+		return c.(*structPlan)
 	}
-	for range 4 {
-		plan := v.buildStructPlan(t)
-		if plan.gen != v.gen.Load() {
-			continue // straddled a Register*: rebuild against the settled registry
-		}
-		actual, _ := v.typeCache.LoadOrStore(t, plan)
-		asp := actual.(*structPlan)
-		if asp.gen == v.gen.Load() {
-			return asp
-		}
-		v.typeCache.CompareAndDelete(t, asp) // evict a stale straddler
-	}
-	// Register* storm: serve an unpublished plan, correct for this call.
-	return v.buildStructPlan(t)
+	plan := v.buildStructPlan(t)
+	actual, _ := v.typeCache.LoadOrStore(t, plan)
+	return actual.(*structPlan)
 }
 
 func (v *Validator) buildStructPlan(t reflect.Type) *structPlan {
-	// stamp gen BEFORE reading the registry: a Register* concurrent with the
-	// read bumps gen past this, so the resulting plan is seen as stale on read.
-	sp := &structPlan{byName: make(map[string]int), ambiguous: map[string]int{}, gen: v.gen.Load()}
+	sp := &structPlan{byName: make(map[string]int), ambiguous: map[string]int{}}
 	v.collectFields(t, nil, "", sp, map[reflect.Type]bool{}, false)
 	sp.prune()
 	for _, fp := range sp.entries {
@@ -197,18 +177,18 @@ func (v *Validator) buildCompiledField(name, expr string) compiledField {
 	cf := compiledField{name: name}
 	ds := v.splitDive(expr)
 	if ds.err != nil {
-		cf.buildErr = ds.err.Error()
+		cf.buildErr = ds.err
 		return cf
 	}
 	if ds.nested {
-		cf.buildErr = "validator: multiple top-level 'dive' is not supported"
+		cf.buildErr = errors.New("multiple top-level dive is not supported")
 		return cf
 	}
 	cf.hasDive = ds.hasDive
 	if ds.container != "" {
 		c, err := v.compile(ds.container)
 		if err != nil {
-			cf.buildErr = err.Error()
+			cf.buildErr = err
 			return cf
 		}
 		cf.container = c
@@ -216,12 +196,12 @@ func (v *Validator) buildCompiledField(name, expr string) compiledField {
 	if ds.hasDive && ds.element != "" {
 		e, err := v.compile(ds.element)
 		if err != nil {
-			cf.buildErr = err.Error()
+			cf.buildErr = err
 			return cf
 		}
 		if e.sometimes {
 			// elements always exist inside their collection: a silent no-op, so reject
-			cf.buildErr = errSometimesInDive
+			cf.buildErr = errors.New(errSometimesInDive)
 			return cf
 		}
 		cf.element = e
@@ -231,7 +211,14 @@ func (v *Validator) buildCompiledField(name, expr string) compiledField {
 
 // collectFields flattens a struct (dotted nested names, flat embedded promotion);
 // seen guards recursion, skipRules drops a `-` subtree's validation but keeps it bindable.
-func (v *Validator) collectFields(t reflect.Type, prefixIdx []int, prefixName string, sp *structPlan, seen map[reflect.Type]bool, skipRules bool) {
+func (v *Validator) collectFields(
+	t reflect.Type,
+	prefixIdx []int,
+	prefixName string,
+	sp *structPlan,
+	seen map[reflect.Type]bool,
+	skipRules bool,
+) {
 	if seen[t] {
 		return
 	}
@@ -330,7 +317,7 @@ func (v *Validator) hasCollectableField(t reflect.Type, seen map[reflect.Type]bo
 
 // attachSource picks the data source: struct via ssVal/ssPlan, else src; a nil
 // struct/map pointer validates as that type's zero value.
-func (v *Validator) attachSource(vd *validation, data any) {
+func (v *Validator) attachSource(vd *Validation, data any) {
 	switch d := data.(type) {
 	case nil:
 		vd.src = mapSource{m: map[string]any{}}

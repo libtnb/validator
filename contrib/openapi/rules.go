@@ -33,7 +33,8 @@ var formats = map[string]string{
 // reports whether the field is required. Rules with no JSON Schema counterpart
 // (database rules, cross-field rules, ...) are skipped: an honest gap beats a
 // wrong constraint.
-func applyRules(s *Schema, rules []validator.RuleInfo) (required bool) {
+func applyRules(s *Schema, rules []validator.RuleInfo) bool {
+	required := false
 	// numeric/number on a string field flips the validator's size family from
 	// rune length to numeric value (numericHint). JSON Schema cannot bound the
 	// numeric value of a string, so size rules are dropped and the numeric
@@ -57,7 +58,7 @@ func applyRules(s *Schema, rules []validator.RuleInfo) (required bool) {
 		case "filled", "notblank":
 			required = true
 			if s.Type == "string" && !numericStr {
-				s.MinLength = uintPtr(1)
+				s.MinLength = new(uint64(1))
 			}
 		case "min", "gte":
 			if !skipSize() {
@@ -149,9 +150,9 @@ func setLower(s *Schema, raw string, exclusive bool) {
 			n = 0
 		}
 		if s.Type == "string" {
-			s.MinLength = uintPtr(uint64(n))
+			s.MinLength = new(uint64(n))
 		} else {
-			s.MinItems = uintPtr(uint64(n))
+			s.MinItems = new(uint64(n))
 		}
 	}
 }
@@ -178,9 +179,9 @@ func setUpper(s *Schema, raw string, exclusive bool) {
 			n = 0
 		}
 		if s.Type == "string" {
-			s.MaxLength = uintPtr(uint64(n))
+			s.MaxLength = new(uint64(n))
 		} else {
-			s.MaxItems = uintPtr(uint64(n))
+			s.MaxItems = new(uint64(n))
 		}
 	}
 }
@@ -226,5 +227,3 @@ func arg(rule validator.RuleInfo, n int) string {
 	}
 	return ""
 }
-
-func uintPtr(n uint64) *uint64 { return &n }

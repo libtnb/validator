@@ -2,7 +2,9 @@ package openapi
 
 import (
 	"encoding/json"
+	"maps"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -14,64 +16,53 @@ var (
 	marshalerType  = reflect.TypeFor[json.Marshaler]()
 )
 
-// derefType follows pointers with a bound so a recursive named pointer type
-// (type P *P) cannot hang generation; mirrors the main module's deref bound.
-// A type still a pointer after the bound falls to the open-schema default.
-func derefType(t reflect.Type) reflect.Type {
-	for range 32 {
-		if t.Kind() != reflect.Pointer {
-			return t
-		}
-		t = t.Elem()
-	}
-	return t
-}
-
 // schemaOf reflects t into a schema. Named struct types land in components
 // and are returned as a $ref; everything else is inlined.
-func (g *Generator) schemaOf(t reflect.Type) *Schema {
+func (g *Generator) schemaOf(t reflect.Type) (*Schema, error) {
 	t = derefType(t)
 
 	if s, ok := g.override[t]; ok {
-		clone := *s
-		return &clone
+		return cloneSchema(s), nil
 	}
 	if t == timeType {
-		return &Schema{Type: "string", Format: "date-time"}
+		return &Schema{Type: "string", Format: "date-time"}, nil
 	}
 	if t == rawMessageType {
-		return &Schema{} // pass-through JSON: anything goes
+		return &Schema{}, nil // pass-through JSON: anything goes
 	}
 
 	switch t.Kind() {
 	case reflect.String:
-		return &Schema{Type: "string"}
+		return &Schema{Type: "string"}, nil
 	case reflect.Bool:
-		return &Schema{Type: "boolean"}
+		return &Schema{Type: "boolean"}, nil
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
 		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		return &Schema{Type: "integer"}
+		return &Schema{Type: "integer"}, nil
 	case reflect.Float32, reflect.Float64:
-		return &Schema{Type: "number"}
+		return &Schema{Type: "number"}, nil
 	case reflect.Slice:
 		// encoding/json serializes byte slices as base64 strings, not arrays
 		if t.Elem().Kind() == reflect.Uint8 {
-			return &Schema{Type: "string", ContentEncoding: "base64"}
+			return &Schema{Type: "string", ContentEncoding: "base64"}, nil
 		}
-		return &Schema{Type: "array", Items: g.schemaOf(t.Elem())}
+		items, err := g.schemaOf(t.Elem())
+		return &Schema{Type: "array", Items: items}, err
 	case reflect.Array:
-		return &Schema{Type: "array", Items: g.schemaOf(t.Elem())}
+		items, err := g.schemaOf(t.Elem())
+		return &Schema{Type: "array", Items: items}, err
 	case reflect.Map:
-		return &Schema{Type: "object", AdditionalProperties: g.schemaOf(t.Elem())}
+		value, err := g.schemaOf(t.Elem())
+		return &Schema{Type: "object", AdditionalProperties: value}, err
 	case reflect.Struct:
 		// a struct that marshals itself (carbon.DateTime, ...) is a string
-		// on the wire unless overridden via WithType
+		// on the wire unless overridden via WithSchema.
 		if t.Implements(marshalerType) || reflect.PointerTo(t).Implements(marshalerType) {
-			return &Schema{Type: "string"}
+			return &Schema{Type: "string"}, nil
 		}
 		return g.structRef(t)
 	default:
-		return &Schema{} // interfaces, funcs: anything goes
+		return &Schema{}, nil // interfaces, funcs: anything goes
 	}
 }
 
@@ -79,7 +70,7 @@ func (g *Generator) schemaOf(t reflect.Type) *Schema {
 // anonymous structs are inlined instead. Distinct types that flatten to the
 // same component name (a.User vs b.User) get numeric suffixes instead of
 // silently overwriting each other.
-func (g *Generator) structRef(t reflect.Type) *Schema {
+func (g *Generator) structRef(t reflect.Type) (*Schema, error) {
 	if t.Name() == "" {
 		return g.structSchema(t)
 	}
@@ -97,17 +88,24 @@ func (g *Generator) structRef(t reflect.Type) *Schema {
 		g.named[t] = name
 		g.owner[name] = t
 		g.doc.Components.Schemas[name] = &Schema{} // placeholder breaks cycles
-		g.doc.Components.Schemas[name] = g.structSchema(t)
+		schema, err := g.structSchema(t)
+		if err != nil {
+			return nil, err
+		}
+		g.doc.Components.Schemas[name] = schema
 	}
 
-	return &Schema{Ref: "#/components/schemas/" + name}
+	return &Schema{Ref: "#/components/schemas/" + name}, nil
 }
 
 // structSchema builds the object schema for t's json-visible fields, with
 // validate-tag constraints applied.
-func (g *Generator) structSchema(t reflect.Type) *Schema {
+func (g *Generator) structSchema(t reflect.Type) (*Schema, error) {
 	s := &Schema{Type: "object", Properties: map[string]*Schema{}}
-	rules := g.rulesFor(t)
+	rules, err := g.rulesFor(t)
+	if err != nil {
+		return nil, err
+	}
 
 	for _, bf := range jsonFields(t, nil, map[reflect.Type]bool{}) {
 		if bf.name == "" {
@@ -116,7 +114,10 @@ func (g *Generator) structSchema(t reflect.Type) *Schema {
 		if _, taken := s.Properties[bf.name]; taken {
 			continue // shallower field wins, like encoding/json
 		}
-		prop := g.schemaOf(bf.Type)
+		prop, err := g.schemaOf(bf.Type)
+		if err != nil {
+			return nil, err
+		}
 		if fr, ok := rules[indexKey(bf.index)]; ok {
 			if applyRules(prop, fr.Rules) {
 				s.Required = append(s.Required, bf.name)
@@ -126,7 +127,7 @@ func (g *Generator) structSchema(t reflect.Type) *Schema {
 		s.Properties[bf.name] = prop
 	}
 
-	return s
+	return s, nil
 }
 
 // bodyField is one json-visible field, with its full index path from the root
@@ -202,4 +203,43 @@ func componentName(t reflect.Type) string {
 		b.WriteString(segment)
 	}
 	return b.String()
+}
+
+// derefType follows pointers with a bound so a recursive named pointer type
+// (type P *P) cannot hang generation; mirrors the main module's deref bound.
+// A type still a pointer after the bound falls to the open-schema default.
+func derefType(t reflect.Type) reflect.Type {
+	for range 32 {
+		if t.Kind() != reflect.Pointer {
+			return t
+		}
+		t = t.Elem()
+	}
+	return t
+}
+
+func cloneSchema(schema *Schema) *Schema {
+	return cloneSchemaWith(schema, make(map[*Schema]*Schema))
+}
+
+func cloneSchemaWith(schema *Schema, seen map[*Schema]*Schema) *Schema {
+	if schema == nil {
+		return nil
+	}
+	if clone, ok := seen[schema]; ok {
+		return clone
+	}
+	clone := *schema
+	seen[schema] = &clone
+	clone.Required = slices.Clone(schema.Required)
+	clone.Enum = slices.Clone(schema.Enum)
+	clone.Items = cloneSchemaWith(schema.Items, seen)
+	clone.AdditionalProperties = cloneSchemaWith(schema.AdditionalProperties, seen)
+	if schema.Properties != nil {
+		clone.Properties = maps.Clone(schema.Properties)
+		for name, property := range clone.Properties {
+			clone.Properties[name] = cloneSchemaWith(property, seen)
+		}
+	}
+	return &clone
 }
