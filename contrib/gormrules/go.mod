@@ -4,7 +4,7 @@ go 1.27.0
 
 require (
 	github.com/libtnb/sqlite v1.2.2
-	github.com/libtnb/validator v0.4.2
+	github.com/libtnb/validator v0.4.3
 	gorm.io/gorm v1.31.2
 )
 
